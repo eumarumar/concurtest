@@ -10,11 +10,10 @@ import (
 	"time"
 )
 
-// Operation describes one named HTTP operation to repeat.
+// Operation describes one named HTTP operation.
 type Operation struct {
-	Name     string
-	Request  HTTPRequest
-	Attempts int
+	Name    string
+	Request HTTPRequest
 }
 
 // Attempt records the identity and result of one scheduled operation attempt.
@@ -46,15 +45,16 @@ func ExecuteConcurrent(
 	ctx context.Context,
 	client *http.Client,
 	operation Operation,
+	attempts int,
 	concurrency int,
 ) (History, error) {
-	if err := validateConcurrentInput(ctx, client, operation, concurrency); err != nil {
+	if err := validateConcurrentInput(ctx, client, operation, attempts, concurrency); err != nil {
 		return History{}, err
 	}
 
 	operation.Request = cloneHTTPRequest(operation.Request)
-	history := History{Attempts: make([]Attempt, operation.Attempts)}
-	jobs := make(chan int, operation.Attempts)
+	history := History{Attempts: make([]Attempt, attempts)}
+	jobs := make(chan int, attempts)
 	for index := range history.Attempts {
 		history.Attempts[index] = Attempt{
 			ID:            index + 1,
@@ -120,6 +120,7 @@ func validateConcurrentInput(
 	ctx context.Context,
 	client *http.Client,
 	operation Operation,
+	attempts int,
 	concurrency int,
 ) error {
 	if ctx == nil {
@@ -134,17 +135,17 @@ func validateConcurrentInput(
 	if strings.TrimSpace(operation.Name) == "" {
 		return errors.New("execute concurrent operation: empty operation name")
 	}
-	if operation.Attempts <= 0 {
-		return fmt.Errorf("execute concurrent operation: attempts must be positive: %d", operation.Attempts)
+	if attempts <= 0 {
+		return fmt.Errorf("execute concurrent operation: attempts must be positive: %d", attempts)
 	}
 	if concurrency <= 0 {
 		return fmt.Errorf("execute concurrent operation: concurrency must be positive: %d", concurrency)
 	}
-	if concurrency > operation.Attempts {
+	if concurrency > attempts {
 		return fmt.Errorf(
 			"execute concurrent operation: concurrency %d exceeds attempts %d",
 			concurrency,
-			operation.Attempts,
+			attempts,
 		)
 	}
 	return nil

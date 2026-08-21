@@ -53,8 +53,7 @@ func TestExecuteConcurrentBoundsConcurrencyAndRecordsHistory(t *testing.T) {
 			Method: http.MethodPost,
 			URL:    server.URL + "/purchase",
 		},
-		Attempts: attempts,
-	}, concurrency)
+	}, attempts, concurrency)
 	if err != nil {
 		t.Fatalf("ExecuteConcurrent() error = %v", err)
 	}
@@ -119,10 +118,9 @@ func TestExecuteConcurrentKeepsIndividualFailuresInHistory(t *testing.T) {
 	})}
 
 	history, err := engine.ExecuteConcurrent(context.Background(), client, engine.Operation{
-		Name:     "purchase",
-		Request:  engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/purchase"},
-		Attempts: 3,
-	}, 3)
+		Name:    "purchase",
+		Request: engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/purchase"},
+	}, 3, 3)
 	if err != nil {
 		t.Fatalf("ExecuteConcurrent() error = %v", err)
 	}
@@ -182,10 +180,9 @@ func TestExecuteConcurrentCancellationReturnsPartialHistory(t *testing.T) {
 	result := make(chan runResult, 1)
 	go func() {
 		history, err := engine.ExecuteConcurrent(ctx, server.Client(), engine.Operation{
-			Name:     "purchase",
-			Request:  engine.HTTPRequest{Method: http.MethodPost, URL: server.URL + "/purchase"},
-			Attempts: 5,
-		}, concurrency)
+			Name:    "purchase",
+			Request: engine.HTTPRequest{Method: http.MethodPost, URL: server.URL + "/purchase"},
+		}, 5, concurrency)
 		result <- runResult{history: history, err: err}
 	}()
 
@@ -267,7 +264,6 @@ func TestExecuteConcurrentSnapshotsRequestBeforeRunningWorkers(t *testing.T) {
 			Header: http.Header{"Content-Type": {"application/json"}},
 			Body:   []byte(`{"quantity":1}`),
 		},
-		Attempts: 2,
 	}
 
 	type runResult struct {
@@ -276,7 +272,7 @@ func TestExecuteConcurrentSnapshotsRequestBeforeRunningWorkers(t *testing.T) {
 	}
 	result := make(chan runResult, 1)
 	go func() {
-		history, err := engine.ExecuteConcurrent(context.Background(), server.Client(), operation, 1)
+		history, err := engine.ExecuteConcurrent(context.Background(), server.Client(), operation, 2, 1)
 		result <- runResult{history: history, err: err}
 	}()
 
@@ -318,9 +314,8 @@ func TestExecuteConcurrentRejectsInvalidInputWithoutStartingWork(t *testing.T) {
 		return testHTTPResponse(http.StatusOK, "ok"), nil
 	})}
 	validOperation := engine.Operation{
-		Name:     "purchase",
-		Request:  engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/purchase"},
-		Attempts: 2,
+		Name:    "purchase",
+		Request: engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/purchase"},
 	}
 	cancelledContext, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -330,21 +325,22 @@ func TestExecuteConcurrentRejectsInvalidInputWithoutStartingWork(t *testing.T) {
 		ctx         context.Context
 		client      *http.Client
 		operation   engine.Operation
+		attempts    int
 		concurrency int
 	}{
-		{name: "nil context", ctx: nil, client: client, operation: validOperation, concurrency: 1},
-		{name: "cancelled context", ctx: cancelledContext, client: client, operation: validOperation, concurrency: 1},
-		{name: "nil client", ctx: context.Background(), client: nil, operation: validOperation, concurrency: 1},
-		{name: "empty operation name", ctx: context.Background(), client: client, operation: engine.Operation{Attempts: 2}, concurrency: 1},
-		{name: "zero attempts", ctx: context.Background(), client: client, operation: engine.Operation{Name: "purchase"}, concurrency: 1},
-		{name: "zero concurrency", ctx: context.Background(), client: client, operation: validOperation, concurrency: 0},
-		{name: "concurrency exceeds attempts", ctx: context.Background(), client: client, operation: validOperation, concurrency: 3},
+		{name: "nil context", ctx: nil, client: client, operation: validOperation, attempts: 2, concurrency: 1},
+		{name: "cancelled context", ctx: cancelledContext, client: client, operation: validOperation, attempts: 2, concurrency: 1},
+		{name: "nil client", ctx: context.Background(), client: nil, operation: validOperation, attempts: 2, concurrency: 1},
+		{name: "empty operation name", ctx: context.Background(), client: client, attempts: 2, concurrency: 1},
+		{name: "zero attempts", ctx: context.Background(), client: client, operation: validOperation, attempts: 0, concurrency: 1},
+		{name: "zero concurrency", ctx: context.Background(), client: client, operation: validOperation, attempts: 2, concurrency: 0},
+		{name: "concurrency exceeds attempts", ctx: context.Background(), client: client, operation: validOperation, attempts: 2, concurrency: 3},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			before := calls.Load()
-			history, err := engine.ExecuteConcurrent(test.ctx, test.client, test.operation, test.concurrency)
+			history, err := engine.ExecuteConcurrent(test.ctx, test.client, test.operation, test.attempts, test.concurrency)
 			if err == nil {
 				t.Fatal("ExecuteConcurrent() error = nil, want validation error")
 			}
