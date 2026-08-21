@@ -1,0 +1,32 @@
+version: 1
+name: inventory oversell
+target: http://127.0.0.1:8080/
+request_timeout: 2s
+
+setup:
+  method: POST
+  path: /reset
+  headers:
+    Content-Type: application/json
+  body: '{"stock":1}'
+
+operation:
+  name: purchase
+  method: POST
+  path: /purchase?source=config
+  headers:
+    Content-Type: application/json
+  body: '{"quantity":1}'
+
+execution:
+  attempts: 2
+  concurrency: 2
+
+observation:
+  method: GET
+  path: /state
+
+invariant:
+  name: final stock must be non-negative
+  json_integer_field: stock
+  minimum: 0
