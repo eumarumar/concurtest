@@ -29,6 +29,7 @@ type Definition struct {
 	Target         string
 	RequestTimeout time.Duration
 	Trials         int
+	Reduce         bool
 	Scenario       engine.Scenario
 }
 
@@ -104,9 +105,10 @@ func (operation operationConfig) request() requestConfig {
 }
 
 type executionConfig struct {
-	Attempts    strictInt `yaml:"attempts"`
-	Concurrency strictInt `yaml:"concurrency"`
-	Trials      strictInt `yaml:"trials"`
+	Attempts    strictInt  `yaml:"attempts"`
+	Concurrency strictInt  `yaml:"concurrency"`
+	Trials      strictInt  `yaml:"trials"`
+	Reduce      strictBool `yaml:"reduce"`
 }
 
 type invariantConfig struct {
@@ -137,6 +139,24 @@ func (value *strictInt) UnmarshalYAML(node *yaml.Node) error {
 	}
 	*value = strictInt(parsed)
 	return nil
+}
+
+type strictBool bool
+
+func (value *strictBool) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.ScalarNode || node.Tag != "!!bool" {
+		return errors.New("must be a boolean")
+	}
+	switch node.Value {
+	case "true":
+		*value = true
+		return nil
+	case "false":
+		*value = false
+		return nil
+	default:
+		return errors.New("must be true or false")
+	}
 }
 
 type strictInt64 int64
@@ -228,6 +248,20 @@ func (document documentConfig) definition() (Definition, error) {
 			engine.MaxTrials,
 		)
 	}
+	if document.Execution.Reduce {
+		if document.Setup == nil {
+			return Definition{}, errors.New("execution.reduce requires setup so every candidate trial can reset state")
+		}
+		if document.Execution.Trials < 3 {
+			return Definition{}, errors.New("execution.trials must be at least 3 when execution.reduce is true")
+		}
+		if document.Execution.Attempts < 2 {
+			return Definition{}, errors.New("execution.attempts must be at least 2 when execution.reduce is true")
+		}
+		if document.Execution.Concurrency < 2 {
+			return Definition{}, errors.New("execution.concurrency must be at least 2 when execution.reduce is true")
+		}
+	}
 
 	invariantName := strings.TrimSpace(string(document.Invariant.Name))
 	if invariantName == "" {
@@ -264,6 +298,7 @@ func (document documentConfig) definition() (Definition, error) {
 		Target:         target.String(),
 		RequestTimeout: requestTimeout,
 		Trials:         int(document.Execution.Trials),
+		Reduce:         bool(document.Execution.Reduce),
 		Scenario: engine.Scenario{
 			Setup: setup,
 			Operation: engine.Operation{

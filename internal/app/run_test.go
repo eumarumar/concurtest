@@ -36,7 +36,7 @@ func TestRunShowsHelp(t *testing.T) {
 			if code := app.Run(context.Background(), args, &stdout, &stderr); code != 0 {
 				t.Errorf("Run() exit code = %d, want 0", code)
 			}
-			if !strings.Contains(stdout.String(), "concurtest run <scenario.yaml>") {
+			if !strings.Contains(stdout.String(), "concurtest run [--attempts N] [--concurrency N] [--no-reduce] <scenario.yaml>") {
 				t.Errorf("stdout does not contain usage:\n%s", stdout.String())
 			}
 			if stderr.Len() != 0 {
@@ -58,6 +58,10 @@ func TestRunRejectsInvalidArguments(t *testing.T) {
 		{name: "unknown command", args: []string{"check"}, want: `unknown command "check"`},
 		{name: "missing scenario", args: []string{"run"}, want: "run needs a scenario file"},
 		{name: "extra argument", args: []string{"run", "scenario.yaml", "extra"}, want: "run accepts exactly one scenario file"},
+		{name: "unknown option", args: []string{"run", "--unknown", "scenario.yaml"}, want: `unknown run option "--unknown"`},
+		{name: "missing option value", args: []string{"run", "--attempts"}, want: "--attempts needs a positive integer"},
+		{name: "invalid option value", args: []string{"run", "--concurrency=zero", "scenario.yaml"}, want: "--concurrency must be a positive integer"},
+		{name: "duplicate option", args: []string{"run", "--attempts=2", "--attempts=3", "scenario.yaml"}, want: "run accepts --attempts only once"},
 	}
 
 	for _, test := range tests {
@@ -290,6 +294,127 @@ func TestRunReturnsErrorForErroredTrial(t *testing.T) {
 	assertOutputContains(t, stdout.String(), "Result: ERROR", "Errored: 1", "Trial 1: ERRORED")
 }
 
+func TestRunReducesToSmallestObservedCandidate(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	operations := 0
+	var setups atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch request.URL.Path {
+		case "/reset":
+			operations = 0
+			setups.Add(1)
+			writer.WriteHeader(http.StatusNoContent)
+		case "/purchase":
+			operations++
+			writer.WriteHeader(http.StatusCreated)
+		case "/state":
+			stock := 0
+			if operations >= 2 {
+				stock = -1
+			}
+			_, _ = fmt.Fprintf(writer, `{"stock":%d}`, stock)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	path := writeScenarioFile(t, reductionScenarioYAML(server.URL, 4, 4, 3))
+	var stdout, stderr bytes.Buffer
+	if code := app.Run(context.Background(), []string{"run", path}, &stdout, &stderr); code != 1 {
+		t.Fatalf("Run() exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want empty", stderr.String())
+	}
+	assertOutputContains(t, stdout.String(),
+		"Reduction: enabled; up to 100 smaller configurations may be tested.",
+		"Reduction: REDUCED",
+		"Candidates evaluated: 1",
+		"Smallest observed failure:",
+		"Attempts: 2",
+		"Concurrency: 2",
+		"Violations: 3 of 3 trials",
+		"not proof that no smaller failure exists",
+		"Reproduce: concurtest run --attempts 2 --concurrency 2 --no-reduce "+fmt.Sprintf("%q", path),
+	)
+	if setups.Load() != 6 {
+		t.Errorf("setup calls = %d, want 6 for baseline and selected candidate", setups.Load())
+	}
+}
+
+func TestRunAppliesExecutionOverridesAndDisablesReduction(t *testing.T) {
+	t.Parallel()
+
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests.Add(1)
+		switch request.URL.Path {
+		case "/reset":
+			writer.WriteHeader(http.StatusNoContent)
+		case "/purchase":
+			writer.WriteHeader(http.StatusCreated)
+		case "/state":
+			_, _ = writer.Write([]byte(`{"stock":-1}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	path := writeScenarioFile(t, reductionScenarioYAML(server.URL, 4, 4, 3))
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"run", path, "--attempts=2", "--concurrency", "2", "--no-reduce"}
+	if code := app.Run(context.Background(), args, &stdout, &stderr); code != 1 {
+		t.Fatalf("Run() exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	assertOutputContains(t, stdout.String(), "Execution: 2 attempts, concurrency 2")
+	if strings.Contains(stdout.String(), "Reduction: enabled") || strings.Contains(stdout.String(), "Reduction: REDUCED") {
+		t.Fatalf("reduction ran despite --no-reduce:\n%s", stdout.String())
+	}
+	if requests.Load() != 12 {
+		t.Errorf("requests = %d, want 12 for three direct trials", requests.Load())
+	}
+}
+
+func TestRunRejectsInvalidExecutionOverridesBeforeRequests(t *testing.T) {
+	t.Parallel()
+
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests.Add(1)
+	}))
+	t.Cleanup(server.Close)
+	path := writeScenarioFile(t, reductionScenarioYAML(server.URL, 4, 4, 3))
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "concurrency exceeds attempts", args: []string{"run", "--attempts=2", "--concurrency=3", path}, want: "must not exceed attempts"},
+		{name: "reduction attempt minimum", args: []string{"run", "--attempts=1", "--concurrency=1", path}, want: "reduction needs at least 2 attempts"},
+		{name: "reduction concurrency minimum", args: []string{"run", "--concurrency=1", path}, want: "reduction needs concurrency of at least 2"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := app.Run(context.Background(), test.args, &stdout, &stderr); code != 2 {
+				t.Errorf("Run() exit code = %d, want 2", code)
+			}
+			if stdout.Len() != 0 || !strings.Contains(stderr.String(), test.want) {
+				t.Errorf("unexpected output:\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
+			}
+		})
+	}
+	if requests.Load() != 0 {
+		t.Errorf("requests = %d, want 0", requests.Load())
+	}
+}
+
 func TestRunPropagatesCanceledContextWithoutRequests(t *testing.T) {
 	t.Parallel()
 
@@ -403,6 +528,16 @@ invariant:
   json_integer_field: stock
   minimum: 0
 `, target, timeout, setup, attempts, concurrency)
+}
+
+func reductionScenarioYAML(target string, attempts, concurrency, trials int) string {
+	document := scenarioYAML(target, "1s", attempts, concurrency, true)
+	return strings.Replace(
+		document,
+		"  trials: 1\n",
+		fmt.Sprintf("  trials: %d\n  reduce: true\n", trials),
+		1,
+	)
 }
 
 func assertOutputContains(t *testing.T, output string, fragments ...string) {

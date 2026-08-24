@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/eumarumar/concurtest/internal/engine"
+	"github.com/eumarumar/concurtest/internal/reduction"
 	"github.com/eumarumar/concurtest/internal/report"
 )
 
@@ -188,6 +189,166 @@ func TestWriteTextReportsInterruptedPartialSequence(t *testing.T) {
 		"Completed: 1",
 		"Trial 1: PASSED",
 		"Problem: the trial sequence was canceled",
+	)
+}
+
+func TestWriteTextReportsReducedCandidateAndExactReproduction(t *testing.T) {
+	t.Parallel()
+
+	input := completedTextInput(engine.RunOutcomeViolated, -1)
+	input.Scenario.Attempts = 4
+	input.Scenario.Concurrency = 4
+	selected := completedTextInput(engine.RunOutcomeViolated, -1).Result
+	input.Reduction = &reduction.Result{
+		StartedAt:   input.Result.StartedAt,
+		CompletedAt: input.Result.CompletedAt.Add(time.Second),
+		Baseline:    input.Result,
+		Candidates: []reduction.CandidateResult{
+			{
+				Candidate: reduction.Candidate{Attempts: 2, Concurrency: 2},
+				Summary: reduction.TrialSummary{
+					Requested: 1,
+					Completed: 1,
+					Violated:  1,
+				},
+				Accepted: true,
+				Trials:   &selected,
+			},
+		},
+		Selected:       reduction.Candidate{Attempts: 2, Concurrency: 2},
+		SelectedTrials: &selected,
+		Status:         reduction.StatusReduced,
+	}
+
+	var output bytes.Buffer
+	if err := report.WriteText(&output, input); err != nil {
+		t.Fatalf("WriteText() error = %v", err)
+	}
+	text := output.String()
+	assertContains(t, text,
+		"Reduction: REDUCED",
+		"Candidates evaluated: 1",
+		"2 attempts, concurrency 2: 0 passed, 1 violated, 0 inconclusive, 0 errored; 1 of 1 completed",
+		"— selected",
+		"Smallest observed failure:",
+		"Attempts: 2",
+		"Concurrency: 2",
+		"Violations: 1 of 1 trials",
+		"not proof that no smaller failure exists",
+		"Selected trial results:",
+		`Reproduce: concurtest run --attempts 2 --concurrency 2 --no-reduce "scenarios/inventory.yaml"`,
+	)
+	if strings.Count(text, "Reproduce:") != 1 {
+		t.Fatalf("reproduction commands = %d, want 1\n%s", strings.Count(text, "Reproduce:"), text)
+	}
+	if strings.Contains(text, "Baseline trial results:") {
+		t.Fatalf("qualified baseline evidence was expanded:\n%s", text)
+	}
+}
+
+func TestWriteTextReportsSkippedUnchangedAndLimitedReduction(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		status     reduction.Status
+		selected   bool
+		want       []string
+		candidates int
+	}{
+		{
+			name:   "skipped",
+			status: reduction.StatusSkipped,
+			want: []string{
+				"Reduction: NOT RUN",
+				"a strict majority is required",
+				"Baseline trial results:",
+			},
+		},
+		{
+			name:       "unchanged",
+			status:     reduction.StatusUnchanged,
+			selected:   true,
+			candidates: 1,
+			want: []string{
+				"Reduction: UNCHANGED",
+				"No smaller tested configuration met the reproduction rule.",
+			},
+		},
+		{
+			name:       "limited",
+			status:     reduction.StatusLimited,
+			selected:   true,
+			candidates: 1,
+			want: []string{
+				"Reduction: SEARCH LIMIT REACHED",
+				"100-candidate search limit was reached",
+				"smaller untested configurations may remain",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := completedTextInput(engine.RunOutcomeViolated, -1)
+			if test.status == reduction.StatusSkipped {
+				input = completedTextInput(engine.RunOutcomePassed, 0)
+			}
+			reduced := reduction.Result{
+				StartedAt:   input.Result.StartedAt,
+				CompletedAt: input.Result.CompletedAt,
+				Baseline:    input.Result,
+				Status:      test.status,
+			}
+			for range test.candidates {
+				reduced.Candidates = append(reduced.Candidates, reduction.CandidateResult{
+					Candidate: reduction.Candidate{Attempts: 2, Concurrency: 2},
+					Summary:   reduction.TrialSummary{Requested: 1, Completed: 1, Passed: 1},
+				})
+			}
+			if test.selected {
+				selected := input.Result
+				reduced.Selected = reduction.Candidate{Attempts: 4, Concurrency: 4}
+				reduced.SelectedTrials = &selected
+			}
+			input.Reduction = &reduced
+			var output bytes.Buffer
+			if err := report.WriteText(&output, input); err != nil {
+				t.Fatalf("WriteText() error = %v", err)
+			}
+			assertContains(t, output.String(), test.want...)
+		})
+	}
+}
+
+func TestWriteTextReportsInterruptedCandidateEvidence(t *testing.T) {
+	t.Parallel()
+
+	input := completedTextInput(engine.RunOutcomeViolated, -1)
+	partial := completedTextInput(engine.RunOutcomeInconclusive, 0).Result
+	input.RunError = context.Canceled
+	input.Reduction = &reduction.Result{
+		StartedAt:   input.Result.StartedAt,
+		CompletedAt: input.Result.CompletedAt,
+		Baseline:    input.Result,
+		Candidates: []reduction.CandidateResult{
+			{
+				Candidate: reduction.Candidate{Attempts: 2, Concurrency: 2},
+				Summary:   reduction.TrialSummary{Requested: 3, Completed: 1, Inconclusive: 1},
+				Trials:    &partial,
+				Err:       context.Canceled,
+			},
+		},
+	}
+
+	var output bytes.Buffer
+	if err := report.WriteText(&output, input); err != nil {
+		t.Fatalf("WriteText() error = %v", err)
+	}
+	assertContains(t, output.String(),
+		"Result: ERROR",
+		"Reduction: INTERRUPTED",
+		"Interrupted candidate: 2 attempts, concurrency 2",
+		"Interrupted candidate trial results:",
 	)
 }
 

@@ -49,11 +49,18 @@ func TestVulnerableInventoryEndToEnd(t *testing.T) {
 		"Completed: 10",
 		"Violations: 10 of 10 completed trials",
 		"First violation: trial 1",
+		"Reduction: REDUCED",
+		"Candidates evaluated: 1",
+		"Smallest observed failure:",
+		"Attempts: 2",
+		"Concurrency: 2",
+		"Violations: 10 of 10 trials",
+		"not proof that no smaller failure exists",
 		`Expected: "stock" >= 0`,
 		`Observed: "stock" = -1`,
 		`#1 "purchase"`,
 		`#2 "purchase"`,
-		"Reproduce: concurtest run "+fmt.Sprintf("%q", scenarioPath),
+		"Reproduce: concurtest run --attempts 2 --concurrency 2 --no-reduce "+fmt.Sprintf("%q", scenarioPath),
 	)
 	if count := strings.Count(report, "Status: HTTP 201 Created"); count != 20 {
 		t.Errorf("successful purchase statuses = %d, want 20\n%s", count, report)

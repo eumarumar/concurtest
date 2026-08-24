@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/eumarumar/concurtest/internal/engine"
+	"github.com/eumarumar/concurtest/internal/reduction"
 )
 
 const maxResponseExcerptBytes = 512
@@ -24,6 +25,7 @@ type TextInput struct {
 	Scenario     engine.Scenario
 	Result       engine.TrialsResult
 	RunError     error
+	Reduction    *reduction.Result
 }
 
 // WriteText writes a deterministic, human-readable report. It preserves the
@@ -71,17 +73,12 @@ func WriteText(writer io.Writer, input TextInput) error {
 		writeRunProblem(buffer, input.RunError)
 	}
 
-	fmt.Fprintln(buffer, "\nTrial results:")
-	for _, trial := range input.Result.Trials {
-		fmt.Fprintf(buffer, "  Trial %d: %s\n", trial.Number, trialStatusLabel(trial.Status))
+	if input.Reduction == nil {
+		writeTrialResults(buffer, input.Scenario, input.Result, "Trial results")
+	} else {
+		writeReduction(buffer, input.Scenario, *input.Reduction, input.RunError)
 	}
-	for _, trial := range input.Result.Trials {
-		if trial.Status == engine.TrialStatusPassed {
-			continue
-		}
-		writeTrialEvidence(buffer, input.Scenario, trial)
-	}
-	fmt.Fprintf(buffer, "\nReproduce: concurtest run %s\n", strconv.QuoteToGraphic(input.ScenarioPath))
+	writeReproduction(buffer, input)
 
 	if err := buffer.Flush(); err != nil {
 		return fmt.Errorf("write text report: %w", err)
@@ -135,6 +132,20 @@ func validateTextInput(input TextInput) error {
 			return fmt.Errorf("write text report: unknown trials status %q", input.Result.Status)
 		}
 	}
+	if input.Reduction != nil && input.RunError == nil {
+		switch input.Reduction.Status {
+		case reduction.StatusSkipped:
+			if input.Reduction.SelectedTrials != nil {
+				return errors.New("write text report: skipped reduction has a selected result")
+			}
+		case reduction.StatusReduced, reduction.StatusUnchanged, reduction.StatusLimited:
+			if input.Reduction.SelectedTrials == nil {
+				return errors.New("write text report: completed reduction has no selected result")
+			}
+		default:
+			return fmt.Errorf("write text report: unknown reduction status %q", input.Reduction.Status)
+		}
+	}
 	return nil
 }
 
@@ -168,6 +179,184 @@ func trialCounts(trials []engine.TrialResult) statusCounts {
 
 func trialStatusLabel(status engine.TrialStatus) string {
 	return strings.ToUpper(string(status))
+}
+
+func writeTrialResults(
+	writer io.Writer,
+	scenario engine.Scenario,
+	result engine.TrialsResult,
+	label string,
+) {
+	fmt.Fprintf(writer, "\n%s:\n", label)
+	for _, trial := range result.Trials {
+		fmt.Fprintf(writer, "  Trial %d: %s\n", trial.Number, trialStatusLabel(trial.Status))
+	}
+	if len(result.Trials) == 0 {
+		fmt.Fprintln(writer, "  None recorded.")
+	}
+	for _, trial := range result.Trials {
+		if trial.Status == engine.TrialStatusPassed {
+			continue
+		}
+		writeTrialEvidence(writer, scenario, trial)
+	}
+}
+
+func writeReduction(
+	writer io.Writer,
+	scenario engine.Scenario,
+	result reduction.Result,
+	runErr error,
+) {
+	fmt.Fprintf(writer, "\nReduction: %s\n", reductionStatusLabel(result.Status, runErr))
+	fmt.Fprintf(writer, "Duration: %s\n", displayDuration(result.Duration()))
+	fmt.Fprintf(writer, "Candidates evaluated: %d\n", len(result.Candidates))
+
+	if len(result.Candidates) > 0 {
+		fmt.Fprintln(writer, "Candidate results:")
+		for _, candidate := range result.Candidates {
+			writeCandidateResult(writer, candidate)
+		}
+	}
+
+	if runErr != nil {
+		writeInterruptedReductionEvidence(writer, scenario, result)
+		return
+	}
+
+	switch result.Status {
+	case reduction.StatusSkipped:
+		baseline := reductionSummary(result.Baseline)
+		if baseline.Inconclusive > 0 || baseline.Errored > 0 {
+			fmt.Fprintf(
+				writer,
+				"Reason: the baseline included %d inconclusive and %d errored trials; reduction needs clean trial results.\n",
+				baseline.Inconclusive,
+				baseline.Errored,
+			)
+		} else {
+			fmt.Fprintf(
+				writer,
+				"Reason: the baseline produced %d violations in %d trials; a strict majority is required.\n",
+				baseline.Violated,
+				baseline.Requested,
+			)
+		}
+		writeTrialResults(writer, scenario, result.Baseline, "Baseline trial results")
+	case reduction.StatusReduced, reduction.StatusUnchanged, reduction.StatusLimited:
+		selected := reductionSummary(*result.SelectedTrials)
+		fmt.Fprintln(writer, "Smallest observed failure:")
+		fmt.Fprintf(writer, "  Attempts: %d\n", result.Selected.Attempts)
+		fmt.Fprintf(writer, "  Concurrency: %d\n", result.Selected.Concurrency)
+		fmt.Fprintf(
+			writer,
+			"  Violations: %d of %d trials\n",
+			selected.Violated,
+			selected.Requested,
+		)
+		if result.Status == reduction.StatusUnchanged {
+			fmt.Fprintln(writer, "No smaller tested configuration met the reproduction rule.")
+		}
+		if result.Status == reduction.StatusLimited {
+			fmt.Fprintf(
+				writer,
+				"The %d-candidate search limit was reached; smaller untested configurations may remain.\n",
+				reduction.MaxCandidates,
+			)
+		}
+		fmt.Fprintln(
+			writer,
+			"Note: this is the smallest failing configuration ConcurTest observed, not proof that no smaller failure exists.",
+		)
+		writeTrialResults(writer, scenario, *result.SelectedTrials, "Selected trial results")
+	}
+}
+
+func reductionStatusLabel(status reduction.Status, runErr error) string {
+	if runErr != nil {
+		return "INTERRUPTED"
+	}
+	switch status {
+	case reduction.StatusSkipped:
+		return "NOT RUN"
+	case reduction.StatusReduced:
+		return "REDUCED"
+	case reduction.StatusUnchanged:
+		return "UNCHANGED"
+	case reduction.StatusLimited:
+		return "SEARCH LIMIT REACHED"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+func writeCandidateResult(writer io.Writer, candidate reduction.CandidateResult) {
+	fmt.Fprintf(
+		writer,
+		"  %d attempts, concurrency %d: %d passed, %d violated, %d inconclusive, %d errored; %d of %d completed; duration %s",
+		candidate.Candidate.Attempts,
+		candidate.Candidate.Concurrency,
+		candidate.Summary.Passed,
+		candidate.Summary.Violated,
+		candidate.Summary.Inconclusive,
+		candidate.Summary.Errored,
+		candidate.Summary.Completed,
+		candidate.Summary.Requested,
+		displayDuration(candidate.Summary.Duration()),
+	)
+	if candidate.Accepted {
+		fmt.Fprint(writer, " — selected")
+	}
+	fmt.Fprintln(writer)
+}
+
+func writeInterruptedReductionEvidence(
+	writer io.Writer,
+	scenario engine.Scenario,
+	result reduction.Result,
+) {
+	if len(result.Candidates) > 0 {
+		candidate := result.Candidates[len(result.Candidates)-1]
+		if candidate.Trials != nil {
+			fmt.Fprintf(
+				writer,
+				"Interrupted candidate: %d attempts, concurrency %d\n",
+				candidate.Candidate.Attempts,
+				candidate.Candidate.Concurrency,
+			)
+			writeTrialResults(writer, scenario, *candidate.Trials, "Interrupted candidate trial results")
+			return
+		}
+	}
+	writeTrialResults(writer, scenario, result.Baseline, "Baseline trial results")
+}
+
+func reductionSummary(result engine.TrialsResult) reduction.TrialSummary {
+	counts := trialCounts(result.Trials)
+	return reduction.TrialSummary{
+		Requested:    result.Requested,
+		Completed:    len(result.Trials),
+		Passed:       counts.passed,
+		Violated:     counts.violated,
+		Inconclusive: counts.inconclusive,
+		Errored:      counts.errored,
+		StartedAt:    result.StartedAt,
+		CompletedAt:  result.CompletedAt,
+	}
+}
+
+func writeReproduction(writer io.Writer, input TextInput) {
+	if input.Reduction != nil && input.Reduction.SelectedTrials != nil {
+		fmt.Fprintf(
+			writer,
+			"\nReproduce: concurtest run --attempts %d --concurrency %d --no-reduce %s\n",
+			input.Reduction.Selected.Attempts,
+			input.Reduction.Selected.Concurrency,
+			strconv.QuoteToGraphic(input.ScenarioPath),
+		)
+		return
+	}
+	fmt.Fprintf(writer, "\nReproduce: concurtest run %s\n", strconv.QuoteToGraphic(input.ScenarioPath))
 }
 
 func writeTrialEvidence(writer io.Writer, scenario engine.Scenario, trial engine.TrialResult) {

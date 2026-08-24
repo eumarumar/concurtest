@@ -22,6 +22,7 @@ execution:
   attempts: 2
   concurrency: 2
   trials: 10
+  reduce: true
 
 observation:
   method: GET

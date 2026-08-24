@@ -13,9 +13,10 @@ operation:
   path: /purchase
 
 execution:
-  attempts: 2
-  concurrency: 2
+  attempts: 4
+  concurrency: 4
   trials: 10
+  reduce: true
 
 observation:
   method: GET

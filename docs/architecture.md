@@ -123,6 +123,24 @@ Aggregate classification gives demonstrated invariant violations precedence
 over trial errors, then inconclusive results, then passes. This keeps a proven
 correctness failure visible even when another trial could not be evaluated.
 
+### Observed failure reduction
+
+Reduction is an explicit scenario option because it can send substantially more
+traffic. It first requires the configured baseline to demonstrate violations in
+a strict majority of at least three clean trials. Errored or inconclusive
+trials prevent reduction from starting.
+
+Candidates vary only attempt count and concurrency. They run sequentially in a
+stable attempts-first order, use the baseline trial count, and reset state
+before every trial through the existing complete scenario runner. Candidate
+concurrency starts at two so reduction remains focused on concurrent failures.
+
+The search stops at the first qualifying candidate or after 100 candidates.
+Rejected candidates retain bounded status summaries; the baseline, selected
+candidate, and any interrupted active candidate retain complete evidence.
+Reports call the result the smallest observed failure and do not claim
+mathematical minimality or statistical confidence.
+
 ### Execution history
 
 ConcurTest must maintain an accurate record of what occurred during a run.

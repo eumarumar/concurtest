@@ -7,7 +7,9 @@ framework used to build that application.
 
 The current v0 supports sequential reproducibility trials. Every trial resets
 the target, repeats one HTTP operation with bounded concurrency, observes final
-HTTP state, and evaluates one top-level JSON integer minimum invariant.
+HTTP state, and evaluates one top-level JSON integer minimum invariant. An
+opt-in reduction pass can test smaller concurrent execution settings after a
+failure reproduces across a clean majority of trials.
 
 > [!WARNING]
 > ConcurTest intentionally sends concurrent requests that may change or damage
@@ -37,9 +39,10 @@ In a second terminal, run the checked-in scenario:
 go run ./cmd/concurtest run examples/vulnerable-inventory/scenario.yaml
 ```
 
-The checked-in scenario runs 10 independent trials. Each trial resets the
-inventory, and the report retains complete evidence for all 10 demonstrated
-violations. Its summary is:
+The checked-in scenario starts with four attempts at concurrency four and runs
+10 independent trials. Each trial resets the inventory. After the failure
+reproduces, ConcurTest tests smaller settings and selects two attempts at
+concurrency two:
 
 ```text
 Result: VIOLATED
@@ -47,10 +50,24 @@ Trials: 10
 Completed: 10
 Violations: 10 of 10 completed trials
 First violation: trial 1
+Reduction: REDUCED
+Candidates evaluated: 1
+Smallest observed failure:
+  Attempts: 2
+  Concurrency: 2
+  Violations: 10 of 10 trials
 ```
 
 The command exits with code `1`. That non-zero result is expected in this
 demonstration: ConcurTest found the intended correctness failure.
+
+The report describes the smallest failing configuration ConcurTest observed.
+It does not claim that the result is mathematically minimal. Its reproduction
+command uses execution overrides and disables another reduction pass:
+
+```text
+concurtest run --attempts 2 --concurrency 2 --no-reduce "examples/vulnerable-inventory/scenario.yaml"
+```
 
 ## Why the example fails
 

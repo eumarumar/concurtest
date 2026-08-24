@@ -45,6 +45,9 @@ func TestDecodeValidScenario(t *testing.T) {
 	if definition.Trials != 10 {
 		t.Errorf("trials = %d, want 10", definition.Trials)
 	}
+	if !definition.Reduce {
+		t.Error("reduce = false, want true")
+	}
 	if definition.Scenario.Setup == nil {
 		t.Fatal("setup request is nil")
 	}
@@ -90,6 +93,9 @@ func TestDecodeAllowsOmittedSetup(t *testing.T) {
 	if definition.Scenario.Setup != nil {
 		t.Errorf("setup = %#v, want nil", definition.Scenario.Setup)
 	}
+	if definition.Reduce {
+		t.Error("reduce = true, want false when omitted")
+	}
 }
 
 func TestDecodeProducesRunnableScenario(t *testing.T) {
@@ -132,6 +138,8 @@ func TestDecodeRejectsInvalidScenario(t *testing.T) {
 	t.Parallel()
 
 	valid := validYAML("http://example.test")
+	reducible := strings.Replace(valid, "operation:\n", "setup:\n  method: POST\n  path: /reset\n\noperation:\n", 1)
+	reducible = strings.Replace(reducible, "  trials: 1\n", "  trials: 3\n  reduce: true\n", 1)
 	tests := []struct {
 		name     string
 		document string
@@ -175,6 +183,11 @@ func TestDecodeRejectsInvalidScenario(t *testing.T) {
 		{name: "negative trials", document: strings.Replace(valid, "trials: 1", "trials: -1", 1)},
 		{name: "fractional trials", document: strings.Replace(valid, "trials: 1", "trials: 1.5", 1)},
 		{name: "too many trials", document: strings.Replace(valid, "trials: 1", "trials: 101", 1)},
+		{name: "non-boolean reduce", document: strings.Replace(valid, "  trials: 1\n", "  trials: 3\n  reduce: yes\n", 1)},
+		{name: "reduce requires setup", document: strings.Replace(valid, "  trials: 1\n", "  trials: 3\n  reduce: true\n", 1)},
+		{name: "reduce requires three trials", document: strings.Replace(reducible, "trials: 3", "trials: 2", 1)},
+		{name: "reduce requires two attempts", document: strings.NewReplacer("attempts: 2", "attempts: 1", "concurrency: 2", "concurrency: 1").Replace(reducible)},
+		{name: "reduce requires concurrency two", document: strings.Replace(reducible, "concurrency: 2", "concurrency: 1", 1)},
 		{name: "empty invariant name", document: strings.Replace(valid, "name: final stock must be non-negative", "name: ' '", 1)},
 		{name: "empty invariant field", document: strings.Replace(valid, "json_integer_field: stock", "json_integer_field: ' '", 1)},
 		{name: "missing minimum", document: strings.Replace(valid, "  minimum: 0\n", "", 1)},
