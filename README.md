@@ -5,8 +5,9 @@ run concurrently, are retried, duplicated, reordered, or interrupted. It tests
 an application through its external interfaces, regardless of the language or
 framework used to build that application.
 
-The current v0 supports one HTTP operation repeated with bounded concurrency,
-one final HTTP observation, and one top-level JSON integer minimum invariant.
+The current v0 supports sequential reproducibility trials. Every trial resets
+the target, repeats one HTTP operation with bounded concurrency, observes final
+HTTP state, and evaluates one top-level JSON integer minimum invariant.
 
 > [!WARNING]
 > ConcurTest intentionally sends concurrent requests that may change or damage
@@ -36,13 +37,16 @@ In a second terminal, run the checked-in scenario:
 go run ./cmd/concurtest run examples/vulnerable-inventory/scenario.yaml
 ```
 
-The report includes both purchase attempts and the final observed state. Its
-key result is:
+The checked-in scenario runs 10 independent trials. Each trial resets the
+inventory, and the report retains complete evidence for all 10 demonstrated
+violations. Its summary is:
 
 ```text
 Result: VIOLATED
-Expected: "stock" >= 0
-Observed: "stock" = -1
+Trials: 10
+Completed: 10
+Violations: 10 of 10 completed trials
+First violation: trial 1
 ```
 
 The command exits with code `1`. That non-zero result is expected in this
@@ -60,8 +64,8 @@ operation atomic. This distinction is central to ConcurTest: code can be
 race-detector clean and still be incorrect under concurrency.
 
 The example uses a two-request rendezvous to make this broken ordering
-repeatable. ConcurTest has no knowledge of that coordination; it interacts only
-through the HTTP requests declared in the
+repeatable within each trial. ConcurTest has no knowledge of that coordination;
+it interacts only through the HTTP requests declared in the
 [scenario](examples/vulnerable-inventory/scenario.yaml).
 
 ## Development checks

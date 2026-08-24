@@ -65,17 +65,8 @@ func Run(
 		result.CompletedAt = time.Now()
 	}()
 
-	if err := validateConcurrentInput(
-		ctx,
-		client,
-		scenario.Operation,
-		scenario.Attempts,
-		scenario.Concurrency,
-	); err != nil {
-		return result, fmt.Errorf("validate scenario execution: %w", err)
-	}
-	if err := validateJSONIntegerMinimumInvariant(scenario.Invariant); err != nil {
-		return result, fmt.Errorf("validate scenario invariant: %w", err)
+	if err := validateRunInput(ctx, client, scenario); err != nil {
+		return result, err
 	}
 
 	if scenario.Setup != nil {
@@ -126,6 +117,22 @@ func Run(
 	}
 
 	return result, nil
+}
+
+func validateRunInput(ctx context.Context, client *http.Client, scenario Scenario) error {
+	if err := validateConcurrentInput(
+		ctx,
+		client,
+		scenario.Operation,
+		scenario.Attempts,
+		scenario.Concurrency,
+	); err != nil {
+		return fmt.Errorf("validate scenario execution: %w", err)
+	}
+	if err := validateJSONIntegerMinimumInvariant(scenario.Invariant); err != nil {
+		return fmt.Errorf("validate scenario invariant: %w", err)
+	}
+	return nil
 }
 
 func requireSuccessfulStage(stage string, execution HTTPExecution) error {

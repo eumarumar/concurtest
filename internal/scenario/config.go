@@ -28,6 +28,7 @@ type Definition struct {
 	Name           string
 	Target         string
 	RequestTimeout time.Duration
+	Trials         int
 	Scenario       engine.Scenario
 }
 
@@ -105,6 +106,7 @@ func (operation operationConfig) request() requestConfig {
 type executionConfig struct {
 	Attempts    strictInt `yaml:"attempts"`
 	Concurrency strictInt `yaml:"concurrency"`
+	Trials      strictInt `yaml:"trials"`
 }
 
 type invariantConfig struct {
@@ -220,6 +222,12 @@ func (document documentConfig) definition() (Definition, error) {
 			document.Execution.Attempts,
 		)
 	}
+	if document.Execution.Trials < 1 || document.Execution.Trials > engine.MaxTrials {
+		return Definition{}, fmt.Errorf(
+			"execution.trials must be between 1 and %d",
+			engine.MaxTrials,
+		)
+	}
 
 	invariantName := strings.TrimSpace(string(document.Invariant.Name))
 	if invariantName == "" {
@@ -255,6 +263,7 @@ func (document documentConfig) definition() (Definition, error) {
 		Name:           name,
 		Target:         target.String(),
 		RequestTimeout: requestTimeout,
+		Trials:         int(document.Execution.Trials),
 		Scenario: engine.Scenario{
 			Setup: setup,
 			Operation: engine.Operation{

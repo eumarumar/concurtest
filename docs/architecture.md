@@ -106,6 +106,23 @@ Future strategies may include:
 
 The architecture must not require those future capabilities to exist immediately.
 
+### Reproducibility trials
+
+A scenario may request a bounded number of independent trials. Trials execute
+sequentially so setup can establish a clean state before every concurrent
+operation group. Concurrency remains bounded within a trial; the trial
+orchestrator itself does not add goroutines.
+
+Each trial retains its complete structured run evidence and is classified as
+passed, violated, inconclusive, or errored. Ordinary trial errors are recorded
+and later trials still run. Parent-context cancellation preserves the active
+partial trial, stops new trials from starting, and makes the overall sequence
+incomplete.
+
+Aggregate classification gives demonstrated invariant violations precedence
+over trial errors, then inconclusive results, then passes. This keeps a proven
+correctness failure visible even when another trial could not be evaluated.
+
 ### Execution history
 
 ConcurTest must maintain an accurate record of what occurred during a run.
@@ -120,6 +137,10 @@ An execution history may contain:
 - failures
 - ordering information
 - relevant metadata
+
+Trial sequences additionally retain their requested count, stable one-based
+trial ordering, aggregate timing and status, and every trial's complete run
+history.
 
 Execution history should be structured data, not only formatted terminal output.
 

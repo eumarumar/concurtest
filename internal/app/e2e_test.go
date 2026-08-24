@@ -45,17 +45,24 @@ func TestVulnerableInventoryEndToEnd(t *testing.T) {
 		`Scenario: "inventory oversell"`,
 		"Target: "+server.URL,
 		"Result: VIOLATED",
+		"Trials: 10",
+		"Completed: 10",
+		"Violations: 10 of 10 completed trials",
+		"First violation: trial 1",
 		`Expected: "stock" >= 0`,
 		`Observed: "stock" = -1`,
 		`#1 "purchase"`,
 		`#2 "purchase"`,
 		"Reproduce: concurtest run "+fmt.Sprintf("%q", scenarioPath),
 	)
-	if count := strings.Count(report, "Status: HTTP 201 Created"); count != 2 {
-		t.Errorf("successful purchase statuses = %d, want 2\n%s", count, report)
+	if count := strings.Count(report, "Status: HTTP 201 Created"); count != 20 {
+		t.Errorf("successful purchase statuses = %d, want 20\n%s", count, report)
 	}
-	if count := strings.Count(report, `Response: "{\"accepted\":true}\n"`); count != 2 {
-		t.Errorf("successful purchase responses = %d, want 2\n%s", count, report)
+	if count := strings.Count(report, `Response: "{\"accepted\":true}\n"`); count != 20 {
+		t.Errorf("successful purchase responses = %d, want 20\n%s", count, report)
+	}
+	if count := strings.Count(report, "evidence (VIOLATED):"); count != 10 {
+		t.Errorf("violation evidence sections = %d, want 10\n%s", count, report)
 	}
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/state", nil)

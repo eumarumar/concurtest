@@ -76,7 +76,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		Transport: transport,
 		Timeout:   definition.RequestTimeout,
 	}
-	result, runErr := engine.Run(ctx, client, definition.Scenario)
+	result, runErr := engine.RunTrials(ctx, client, definition.Scenario, definition.Trials)
 	reportErr := report.WriteText(stdout, report.TextInput{
 		ScenarioPath: scenarioPath,
 		Scenario:     definition.Scenario,
@@ -91,15 +91,15 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	if runErr != nil {
 		return exitError
 	}
-	switch result.Outcome {
-	case engine.RunOutcomePassed:
+	switch result.Status {
+	case engine.TrialStatusPassed:
 		return exitSuccess
-	case engine.RunOutcomeViolated:
+	case engine.TrialStatusViolated:
 		return exitViolation
-	case engine.RunOutcomeInconclusive:
+	case engine.TrialStatusInconclusive, engine.TrialStatusErrored:
 		return exitError
 	default:
-		writeDiagnostic(stderr, "ConcurTest returned an unknown run result %q.", result.Outcome)
+		writeDiagnostic(stderr, "ConcurTest returned an unknown trials result %q.", result.Status)
 		return exitError
 	}
 }

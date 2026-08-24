@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/eumarumar/concurtest/internal/engine"
@@ -21,7 +22,7 @@ const maxResponseExcerptBytes = 512
 type TextInput struct {
 	ScenarioPath string
 	Scenario     engine.Scenario
-	Result       engine.RunResult
+	Result       engine.TrialsResult
 	RunError     error
 }
 
@@ -31,6 +32,9 @@ func WriteText(writer io.Writer, input TextInput) error {
 	if writer == nil {
 		return errors.New("write text report: nil writer")
 	}
+	if err := validateTextInput(input); err != nil {
+		return err
+	}
 	resultLabel, err := resultLabel(input)
 	if err != nil {
 		return err
@@ -38,6 +42,8 @@ func WriteText(writer io.Writer, input TextInput) error {
 
 	buffer := bufio.NewWriter(writer)
 	fmt.Fprintf(buffer, "Result: %s\n", resultLabel)
+	fmt.Fprintf(buffer, "Trials: %d\n", input.Result.Requested)
+	fmt.Fprintf(buffer, "Completed: %d\n", len(input.Result.Trials))
 	fmt.Fprintf(buffer, "Duration: %s\n", displayDuration(input.Result.Duration()))
 	fmt.Fprintf(
 		buffer,
@@ -46,22 +52,35 @@ func WriteText(writer io.Writer, input TextInput) error {
 		input.Scenario.Concurrency,
 	)
 
-	if input.RunError != nil {
-		writeRunProblem(buffer, input.RunError)
-	} else if input.Result.Outcome == engine.RunOutcomeInconclusive {
-		failed := failedAttemptCount(input.Result.History)
-		fmt.Fprintf(
-			buffer,
-			"Reason: %d of %d operation attempts failed or did not start, so this run cannot be reported as a pass.\n",
-			failed,
-			len(input.Result.History.Attempts),
-		)
+	counts := trialCounts(input.Result.Trials)
+	fmt.Fprintf(buffer, "Passed: %d\n", counts.passed)
+	fmt.Fprintf(buffer, "Violated: %d\n", counts.violated)
+	fmt.Fprintf(buffer, "Inconclusive: %d\n", counts.inconclusive)
+	fmt.Fprintf(buffer, "Errored: %d\n", counts.errored)
+	fmt.Fprintf(
+		buffer,
+		"Violations: %d of %d completed trials\n",
+		counts.violated,
+		len(input.Result.Trials),
+	)
+	if counts.firstViolation != 0 {
+		fmt.Fprintf(buffer, "First violation: trial %d\n", counts.firstViolation)
 	}
 
-	writeInvariant(buffer, input.Scenario.Invariant, input.Result.Evaluation)
-	writeOptionalExecution(buffer, "Setup", input.Result.Setup)
-	writeAttempts(buffer, input.Result.History)
-	writeObservation(buffer, input.Result.Observation)
+	if input.RunError != nil {
+		writeRunProblem(buffer, input.RunError)
+	}
+
+	fmt.Fprintln(buffer, "\nTrial results:")
+	for _, trial := range input.Result.Trials {
+		fmt.Fprintf(buffer, "  Trial %d: %s\n", trial.Number, trialStatusLabel(trial.Status))
+	}
+	for _, trial := range input.Result.Trials {
+		if trial.Status == engine.TrialStatusPassed {
+			continue
+		}
+		writeTrialEvidence(buffer, input.Scenario, trial)
+	}
 	fmt.Fprintf(buffer, "\nReproduce: concurtest run %s\n", strconv.QuoteToGraphic(input.ScenarioPath))
 
 	if err := buffer.Flush(); err != nil {
@@ -74,25 +93,126 @@ func resultLabel(input TextInput) (string, error) {
 	if input.RunError != nil {
 		return "ERROR", nil
 	}
-	switch input.Result.Outcome {
-	case engine.RunOutcomePassed:
+	switch input.Result.Status {
+	case engine.TrialStatusPassed:
 		return "PASSED", nil
-	case engine.RunOutcomeViolated:
+	case engine.TrialStatusViolated:
 		return "VIOLATED", nil
-	case engine.RunOutcomeInconclusive:
+	case engine.TrialStatusInconclusive:
 		return "INCONCLUSIVE", nil
+	case engine.TrialStatusErrored:
+		return "ERROR", nil
 	default:
-		return "", fmt.Errorf("write text report: unknown run outcome %q", input.Result.Outcome)
+		return "", fmt.Errorf("write text report: unknown trials status %q", input.Result.Status)
 	}
+}
+
+func validateTextInput(input TextInput) error {
+	if input.Result.Requested < 1 || input.Result.Requested > engine.MaxTrials {
+		return fmt.Errorf("write text report: invalid requested trial count %d", input.Result.Requested)
+	}
+	if len(input.Result.Trials) > input.Result.Requested {
+		return fmt.Errorf(
+			"write text report: recorded %d trials for %d requested",
+			len(input.Result.Trials),
+			input.Result.Requested,
+		)
+	}
+	for index, trial := range input.Result.Trials {
+		if trial.Number != index+1 {
+			return fmt.Errorf("write text report: trial %d has number %d", index+1, trial.Number)
+		}
+		switch trial.Status {
+		case engine.TrialStatusPassed, engine.TrialStatusViolated, engine.TrialStatusInconclusive, engine.TrialStatusErrored:
+		default:
+			return fmt.Errorf("write text report: trial %d has unknown status %q", trial.Number, trial.Status)
+		}
+	}
+	if input.RunError == nil {
+		switch input.Result.Status {
+		case engine.TrialStatusPassed, engine.TrialStatusViolated, engine.TrialStatusInconclusive, engine.TrialStatusErrored:
+		default:
+			return fmt.Errorf("write text report: unknown trials status %q", input.Result.Status)
+		}
+	}
+	return nil
+}
+
+type statusCounts struct {
+	passed         int
+	violated       int
+	inconclusive   int
+	errored        int
+	firstViolation int
+}
+
+func trialCounts(trials []engine.TrialResult) statusCounts {
+	var counts statusCounts
+	for _, trial := range trials {
+		switch trial.Status {
+		case engine.TrialStatusPassed:
+			counts.passed++
+		case engine.TrialStatusViolated:
+			counts.violated++
+			if counts.firstViolation == 0 {
+				counts.firstViolation = trial.Number
+			}
+		case engine.TrialStatusInconclusive:
+			counts.inconclusive++
+		case engine.TrialStatusErrored:
+			counts.errored++
+		}
+	}
+	return counts
+}
+
+func trialStatusLabel(status engine.TrialStatus) string {
+	return strings.ToUpper(string(status))
+}
+
+func writeTrialEvidence(writer io.Writer, scenario engine.Scenario, trial engine.TrialResult) {
+	fmt.Fprintf(writer, "\nTrial %d evidence (%s):\n", trial.Number, trialStatusLabel(trial.Status))
+	fmt.Fprintf(writer, "  Duration: %s\n", displayDuration(trial.Run.Duration()))
+	if trial.Err != nil {
+		writeTrialProblem(writer, trial.Err)
+	} else if trial.Status == engine.TrialStatusInconclusive {
+		failed := failedAttemptCount(trial.Run.History)
+		fmt.Fprintf(
+			writer,
+			"  Reason: %d of %d operation attempts failed or did not start, so this trial cannot be reported as a pass.\n",
+			failed,
+			len(trial.Run.History.Attempts),
+		)
+	}
+	writeInvariant(writer, scenario.Invariant, trial.Run.Evaluation)
+	writeOptionalExecution(writer, "Setup", trial.Run.Setup)
+	writeAttempts(writer, trial.Run.History)
+	writeObservation(writer, trial.Run.Observation)
 }
 
 func writeRunProblem(writer io.Writer, runErr error) {
 	if errors.Is(runErr, context.Canceled) {
-		fmt.Fprintln(writer, "Problem: the run was canceled.")
+		fmt.Fprintln(writer, "Problem: the trial sequence was canceled before all requested trials completed.")
+		return
+	}
+	if errors.Is(runErr, context.DeadlineExceeded) {
+		fmt.Fprintln(writer, "Problem: the trial sequence deadline was exceeded before all requested trials completed.")
 		return
 	}
 	fmt.Fprintf(writer, "Problem: %s\n", quoted(runErr.Error()))
 	fmt.Fprintln(writer, "Next step: check the target and scenario, then try again.")
+}
+
+func writeTrialProblem(writer io.Writer, runErr error) {
+	if errors.Is(runErr, context.Canceled) {
+		fmt.Fprintln(writer, "  Problem: this trial was canceled.")
+		return
+	}
+	if errors.Is(runErr, context.DeadlineExceeded) {
+		fmt.Fprintln(writer, "  Problem: this trial's deadline was exceeded.")
+		return
+	}
+	fmt.Fprintf(writer, "  Problem: %s\n", quoted(runErr.Error()))
 }
 
 func writeInvariant(

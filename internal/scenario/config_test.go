@@ -42,6 +42,9 @@ func TestDecodeValidScenario(t *testing.T) {
 	if definition.RequestTimeout != 2*time.Second {
 		t.Errorf("request timeout = %v, want %v", definition.RequestTimeout, 2*time.Second)
 	}
+	if definition.Trials != 10 {
+		t.Errorf("trials = %d, want 10", definition.Trials)
+	}
 	if definition.Scenario.Setup == nil {
 		t.Fatal("setup request is nil")
 	}
@@ -116,12 +119,12 @@ func TestDecodeProducesRunnableScenario(t *testing.T) {
 	}
 	client := server.Client()
 	client.Timeout = definition.RequestTimeout
-	result, err := engine.Run(context.Background(), client, definition.Scenario)
+	result, err := engine.RunTrials(context.Background(), client, definition.Scenario, definition.Trials)
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("RunTrials() error = %v", err)
 	}
-	if result.Outcome != engine.RunOutcomeViolated {
-		t.Errorf("outcome = %q, want %q", result.Outcome, engine.RunOutcomeViolated)
+	if result.Status != engine.TrialStatusViolated {
+		t.Errorf("status = %q, want %q", result.Status, engine.TrialStatusViolated)
 	}
 }
 
@@ -167,6 +170,11 @@ func TestDecodeRejectsInvalidScenario(t *testing.T) {
 		{name: "fractional attempts", document: strings.Replace(valid, "attempts: 2", "attempts: 2.5", 1)},
 		{name: "zero concurrency", document: strings.Replace(valid, "concurrency: 2", "concurrency: 0", 1)},
 		{name: "concurrency exceeds attempts", document: strings.Replace(valid, "concurrency: 2", "concurrency: 3", 1)},
+		{name: "missing trials", document: strings.Replace(valid, "  trials: 1\n", "", 1)},
+		{name: "zero trials", document: strings.Replace(valid, "trials: 1", "trials: 0", 1)},
+		{name: "negative trials", document: strings.Replace(valid, "trials: 1", "trials: -1", 1)},
+		{name: "fractional trials", document: strings.Replace(valid, "trials: 1", "trials: 1.5", 1)},
+		{name: "too many trials", document: strings.Replace(valid, "trials: 1", "trials: 101", 1)},
 		{name: "empty invariant name", document: strings.Replace(valid, "name: final stock must be non-negative", "name: ' '", 1)},
 		{name: "empty invariant field", document: strings.Replace(valid, "json_integer_field: stock", "json_integer_field: ' '", 1)},
 		{name: "missing minimum", document: strings.Replace(valid, "  minimum: 0\n", "", 1)},
@@ -208,6 +216,7 @@ operation:
 execution:
   attempts: 2
   concurrency: 2
+  trials: 1
 
 observation:
   method: GET

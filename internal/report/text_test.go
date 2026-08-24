@@ -25,6 +25,10 @@ func TestWriteTextReportsViolationEvidence(t *testing.T) {
 	reportText := output.String()
 	assertContains(t, reportText,
 		"Result: VIOLATED",
+		"Trials: 1",
+		"Completed: 1",
+		"Violations: 1 of 1 completed trials",
+		"First violation: trial 1",
 		"Duration: 80ms",
 		"Execution: 2 attempts, concurrency 2",
 		`Name: "final stock must be non-negative"`,
@@ -89,7 +93,7 @@ func TestWriteTextClassifiesCompletedOutcomes(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			input := completedTextInput(test.outcome, test.observation)
 			if test.attempts != nil {
-				input.Result.History.Attempts = test.attempts
+				input.Result.Trials[0].Run.History.Attempts = test.attempts
 			}
 			var output bytes.Buffer
 			if err := report.WriteText(&output, input); err != nil {
@@ -103,6 +107,90 @@ func TestWriteTextClassifiesCompletedOutcomes(t *testing.T) {
 	}
 }
 
+func TestWriteTextSummarizesMixedTrialsAndExpandsOnlyNonPassingEvidence(t *testing.T) {
+	t.Parallel()
+
+	passed := completedTextInput(engine.RunOutcomePassed, 0).Result.Trials[0].Run
+	violated := completedTextInput(engine.RunOutcomeViolated, -1).Result.Trials[0].Run
+	inconclusive := completedTextInput(engine.RunOutcomeInconclusive, 0).Result.Trials[0].Run
+	inconclusive.History.Attempts[0].Execution = failedExecution()
+	errored := engine.RunResult{
+		StartedAt:   time.Unix(1_700_000_001, 0),
+		CompletedAt: time.Unix(1_700_000_001, int64(time.Millisecond)),
+	}
+	input := report.TextInput{
+		ScenarioPath: "scenario.yaml",
+		Scenario:     testScenario(),
+		Result: engine.TrialsResult{
+			Requested: 4,
+			Trials: []engine.TrialResult{
+				{Number: 1, Status: engine.TrialStatusPassed, Run: passed},
+				{Number: 2, Status: engine.TrialStatusViolated, Run: violated},
+				{Number: 3, Status: engine.TrialStatusInconclusive, Run: inconclusive},
+				{Number: 4, Status: engine.TrialStatusErrored, Run: errored, Err: errors.New("setup unavailable")},
+			},
+			StartedAt:   time.Unix(1_700_000_000, 0),
+			CompletedAt: time.Unix(1_700_000_002, 0),
+			Status:      engine.TrialStatusViolated,
+		},
+	}
+
+	var output bytes.Buffer
+	if err := report.WriteText(&output, input); err != nil {
+		t.Fatalf("WriteText() error = %v", err)
+	}
+	text := output.String()
+	assertContains(t, text,
+		"Result: VIOLATED",
+		"Trials: 4",
+		"Completed: 4",
+		"Passed: 1",
+		"Violated: 1",
+		"Inconclusive: 1",
+		"Errored: 1",
+		"Violations: 1 of 4 completed trials",
+		"First violation: trial 2",
+		"Trial 1: PASSED",
+		"Trial 2: VIOLATED",
+		"Trial 3: INCONCLUSIVE",
+		"Trial 4: ERRORED",
+		"Trial 2 evidence (VIOLATED):",
+		"Trial 3 evidence (INCONCLUSIVE):",
+		"Trial 4 evidence (ERRORED):",
+		`Problem: "setup unavailable"`,
+	)
+	if strings.Contains(text, "Trial 1 evidence") {
+		t.Fatalf("passing trial evidence was expanded:\n%s", text)
+	}
+	positions := []int{
+		strings.Index(text, "Trial 2 evidence"),
+		strings.Index(text, "Trial 3 evidence"),
+		strings.Index(text, "Trial 4 evidence"),
+	}
+	if positions[0] < 0 || positions[0] >= positions[1] || positions[1] >= positions[2] {
+		t.Fatalf("trial evidence is not ordered:\n%s", text)
+	}
+}
+
+func TestWriteTextReportsInterruptedPartialSequence(t *testing.T) {
+	t.Parallel()
+
+	input := completedTextInput(engine.RunOutcomePassed, 0)
+	input.Result.Requested = 3
+	input.RunError = context.Canceled
+	var output bytes.Buffer
+	if err := report.WriteText(&output, input); err != nil {
+		t.Fatalf("WriteText() error = %v", err)
+	}
+	assertContains(t, output.String(),
+		"Result: ERROR",
+		"Trials: 3",
+		"Completed: 1",
+		"Trial 1: PASSED",
+		"Problem: the trial sequence was canceled",
+	)
+}
+
 func TestWriteTextReportsPartialRunErrors(t *testing.T) {
 	t.Parallel()
 
@@ -114,7 +202,7 @@ func TestWriteTextReportsPartialRunErrors(t *testing.T) {
 		{
 			name:     "canceled",
 			runErr:   context.Canceled,
-			wantText: []string{"Result: ERROR", "Problem: the run was canceled.", "Observed: not evaluated", "None recorded.", "Not reached."},
+			wantText: []string{"Result: ERROR", "Problem: the trial sequence was canceled", "Trials: 1", "Completed: 0"},
 		},
 		{
 			name:     "stage failure",
@@ -128,7 +216,8 @@ func TestWriteTextReportsPartialRunErrors(t *testing.T) {
 			input := report.TextInput{
 				ScenarioPath: "scenario.yaml",
 				Scenario:     testScenario(),
-				Result: engine.RunResult{
+				Result: engine.TrialsResult{
+					Requested:   1,
 					StartedAt:   time.Unix(0, 0),
 					CompletedAt: time.Unix(0, int64(time.Millisecond)),
 				},
@@ -147,9 +236,9 @@ func TestWriteTextBoundsAndEscapesResponseBodies(t *testing.T) {
 	t.Parallel()
 
 	input := completedTextInput(engine.RunOutcomeViolated, -1)
-	input.Result.History.Attempts[0].Execution.Response.Body = []byte(strings.Repeat("x", 513) + "hidden-tail")
-	input.Result.History.Attempts[1].Execution.Response.Body = []byte("first\nsecond")
-	input.Result.History.Attempts[1].Execution.Response.BodyTruncated = true
+	input.Result.Trials[0].Run.History.Attempts[0].Execution.Response.Body = []byte(strings.Repeat("x", 513) + "hidden-tail")
+	input.Result.Trials[0].Run.History.Attempts[1].Execution.Response.Body = []byte("first\nsecond")
+	input.Result.Trials[0].Run.History.Attempts[1].Execution.Response.BodyTruncated = true
 
 	var output bytes.Buffer
 	if err := report.WriteText(&output, input); err != nil {
@@ -179,7 +268,8 @@ func TestWriteTextReturnsWriterAndInputErrors(t *testing.T) {
 	}
 
 	var output bytes.Buffer
-	input := completedTextInput("unknown", 0)
+	input := completedTextInput(engine.RunOutcomePassed, 0)
+	input.Result.Status = "unknown"
 	if err := report.WriteText(&output, input); err == nil {
 		t.Fatal("WriteText() error = nil, want unknown outcome error")
 	}
@@ -225,24 +315,38 @@ func completedTextInput(outcome engine.RunOutcome, observed int64) report.TextIn
 		Violated:  outcome == engine.RunOutcomeViolated,
 	}
 
+	status := engine.TrialStatusPassed
+	switch outcome {
+	case engine.RunOutcomeViolated:
+		status = engine.TrialStatusViolated
+	case engine.RunOutcomeInconclusive:
+		status = engine.TrialStatusInconclusive
+	}
+	run := engine.RunResult{
+		StartedAt:   start,
+		CompletedAt: start.Add(80 * time.Millisecond),
+		Setup:       setup,
+		History: engine.History{
+			StartedAt:   start.Add(10 * time.Millisecond),
+			CompletedAt: start.Add(50 * time.Millisecond),
+			Attempts: []engine.Attempt{
+				{ID: 1, OperationName: "purchase", Execution: first},
+				{ID: 2, OperationName: "purchase", Execution: second},
+			},
+		},
+		Observation: observation,
+		Evaluation:  &evaluation,
+		Outcome:     outcome,
+	}
 	return report.TextInput{
 		ScenarioPath: "scenarios/inventory.yaml",
 		Scenario:     scenario,
-		Result: engine.RunResult{
+		Result: engine.TrialsResult{
+			Requested:   1,
+			Trials:      []engine.TrialResult{{Number: 1, Status: status, Run: run}},
 			StartedAt:   start,
 			CompletedAt: start.Add(80 * time.Millisecond),
-			Setup:       setup,
-			History: engine.History{
-				StartedAt:   start.Add(10 * time.Millisecond),
-				CompletedAt: start.Add(50 * time.Millisecond),
-				Attempts: []engine.Attempt{
-					{ID: 1, OperationName: "purchase", Execution: first},
-					{ID: 2, OperationName: "purchase", Execution: second},
-				},
-			},
-			Observation: observation,
-			Evaluation:  &evaluation,
-			Outcome:     outcome,
+			Status:      status,
 		},
 	}
 }

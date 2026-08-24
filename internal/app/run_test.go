@@ -151,6 +151,10 @@ func TestRunReportsViolationAndPrintsTargetBeforeRequests(t *testing.T) {
 		"Target: "+server.URL,
 		"Warning: this command sends concurrent requests and may modify target state.",
 		"Result: VIOLATED",
+		"Trials: 1",
+		"Completed: 1",
+		"Violations: 1 of 1 completed trials",
+		"First violation: trial 1",
 		`Expected: "stock" >= 0`,
 		`Observed: "stock" = -1`,
 		`#1 "purchase"`,
@@ -188,7 +192,10 @@ func TestRunReturnsSuccessForTrustworthyPass(t *testing.T) {
 	if code := app.Run(context.Background(), []string{"run", path}, &stdout, &stderr); code != 0 {
 		t.Fatalf("Run() exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
 	}
-	assertOutputContains(t, stdout.String(), "Result: PASSED", `Observed: "stock" = 0`)
+	assertOutputContains(t, stdout.String(), "Result: PASSED", "Trials: 1", "Trial 1: PASSED")
+	if strings.Contains(stdout.String(), "Invariant:") || strings.Contains(stdout.String(), "Attempts:") {
+		t.Fatalf("passing trial evidence was expanded:\n%s", stdout.String())
+	}
 }
 
 func TestRunUsesRequestTimeoutAndReturnsInconclusive(t *testing.T) {
@@ -220,6 +227,69 @@ func TestRunUsesRequestTimeoutAndReturnsInconclusive(t *testing.T) {
 	)
 }
 
+func TestRunContinuesAfterTrialErrorAndViolationControlsExitCode(t *testing.T) {
+	t.Parallel()
+
+	var setups atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/reset":
+			if setups.Add(1) == 1 {
+				http.Error(writer, "setup unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			writer.WriteHeader(http.StatusNoContent)
+		case "/purchase":
+			writer.WriteHeader(http.StatusCreated)
+		case "/state":
+			_, _ = writer.Write([]byte(`{"stock":-1}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	document := strings.Replace(scenarioYAML(server.URL, "1s", 1, 1, true), "trials: 1", "trials: 2", 1)
+	path := writeScenarioFile(t, document)
+	var stdout, stderr bytes.Buffer
+	if code := app.Run(context.Background(), []string{"run", path}, &stdout, &stderr); code != 1 {
+		t.Fatalf("Run() exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want empty", stderr.String())
+	}
+	assertOutputContains(t, stdout.String(),
+		"Result: VIOLATED",
+		"Trials: 2",
+		"Completed: 2",
+		"Violated: 1",
+		"Errored: 1",
+		"First violation: trial 2",
+		"Trial 1: ERRORED",
+		"Trial 2: VIOLATED",
+	)
+}
+
+func TestRunReturnsErrorForErroredTrial(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/reset" {
+			http.Error(writer, "setup unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		http.NotFound(writer, request)
+	}))
+	t.Cleanup(server.Close)
+
+	path := writeScenarioFile(t, scenarioYAML(server.URL, "1s", 1, 1, true))
+	var stdout, stderr bytes.Buffer
+	if code := app.Run(context.Background(), []string{"run", path}, &stdout, &stderr); code != 2 {
+		t.Fatalf("Run() exit code = %d, want 2\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	assertOutputContains(t, stdout.String(), "Result: ERROR", "Errored: 1", "Trial 1: ERRORED")
+}
+
 func TestRunPropagatesCanceledContextWithoutRequests(t *testing.T) {
 	t.Parallel()
 
@@ -239,7 +309,7 @@ func TestRunPropagatesCanceledContextWithoutRequests(t *testing.T) {
 	if requests.Load() != 0 {
 		t.Errorf("requests = %d, want 0", requests.Load())
 	}
-	assertOutputContains(t, stdout.String(), "Result: ERROR", "Problem: the run was canceled.")
+	assertOutputContains(t, stdout.String(), "Result: ERROR", "Problem: the trial sequence was canceled", "Trials: 1", "Completed: 0")
 }
 
 func TestRunHandlesOutputFailures(t *testing.T) {
@@ -322,6 +392,7 @@ request_timeout: %s
 execution:
   attempts: %d
   concurrency: %d
+  trials: 1
 
 observation:
   method: GET
