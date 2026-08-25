@@ -60,6 +60,66 @@ func TestWriteTextReportsViolationEvidence(t *testing.T) {
 	}
 }
 
+func TestWriteTextReportsMaximumSuccessfulAttemptsEvidence(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		statuses   []int
+		wantStatus string
+	}{
+		{
+			name:       "default 2xx statuses",
+			wantStatus: "Successful statuses: HTTP 200-299 (default)",
+		},
+		{
+			name:       "explicit statuses",
+			statuses:   []int{http.StatusCreated, http.StatusAccepted},
+			wantStatus: "Successful statuses: HTTP 201 Created, HTTP 202 Accepted",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := completedTextInput(engine.RunOutcomeViolated, -1)
+			definition := engine.MaximumSuccessfulAttemptsInvariant{
+				Name:                  "accepted purchases must not exceed stock",
+				Maximum:               1,
+				SuccessfulStatusCodes: test.statuses,
+			}
+			input.Scenario.Invariant = engine.Invariant{MaximumSuccessfulAttempts: &definition}
+			input.Scenario.Observation = nil
+			trial := &input.Result.Trials[0]
+			trial.Run.Observation = nil
+			trial.Run.History.Attempts[1].Execution.Response.StatusCode = http.StatusAccepted
+			historyEvaluation := engine.MaximumSuccessfulAttemptsEvaluation{
+				Invariant:            definition,
+				SuccessfulAttemptIDs: []int{1, 2},
+				OverLimitAttemptIDs:  []int{2},
+				Violated:             true,
+			}
+			trial.Run.Evaluation = &engine.InvariantEvaluation{
+				MaximumSuccessfulAttempts: &historyEvaluation,
+				Violated:                  true,
+			}
+
+			var output bytes.Buffer
+			if err := report.WriteText(&output, input); err != nil {
+				t.Fatalf("WriteText() error = %v", err)
+			}
+			assertContains(t, output.String(),
+				`Name: "accepted purchases must not exceed stock"`,
+				"Expected: at most 1 successful attempt",
+				test.wantStatus,
+				"Observed: 2 successful attempts",
+				"Successful attempts: #1, #2",
+				"Beyond maximum: #2",
+				"Observation:\n  Not configured.",
+			)
+		})
+	}
+}
+
 func TestWriteTextClassifiesCompletedOutcomes(t *testing.T) {
 	t.Parallel()
 
@@ -159,6 +219,7 @@ func TestWriteTextSummarizesMixedTrialsAndExpandsOnlyNonPassingEvidence(t *testi
 		"Trial 3 evidence (INCONCLUSIVE):",
 		"Trial 4 evidence (ERRORED):",
 		`Problem: "setup unavailable"`,
+		"Observation:\n  Not reached.",
 	)
 	if strings.Contains(text, "Trial 1 evidence") {
 		t.Fatalf("passing trial evidence was expanded:\n%s", text)
@@ -464,16 +525,20 @@ func completedTextInput(outcome engine.RunOutcome, observed int64) report.TextIn
 		[]byte("out of stock"),
 	)
 	observation := successfulExecution(
-		&scenario.Observation,
+		scenario.Observation,
 		start.Add(60*time.Millisecond),
 		5*time.Millisecond,
 		http.StatusOK,
 		[]byte(`{"stock":-1}`),
 	)
-	evaluation := engine.InvariantEvaluation{
-		Invariant: scenario.Invariant,
+	jsonEvaluation := engine.JSONIntegerMinimumEvaluation{
+		Invariant: *scenario.Invariant.JSONIntegerMinimum,
 		Observed:  observed,
 		Violated:  outcome == engine.RunOutcomeViolated,
+	}
+	evaluation := engine.InvariantEvaluation{
+		JSONIntegerMinimum: &jsonEvaluation,
+		Violated:           outcome == engine.RunOutcomeViolated,
 	}
 
 	status := engine.TrialStatusPassed
@@ -527,15 +592,17 @@ func testScenario() engine.Scenario {
 		},
 		Attempts:    2,
 		Concurrency: 2,
-		Observation: engine.HTTPRequest{
+		Observation: &engine.HTTPRequest{
 			Method: http.MethodGet,
 			URL:    "http://example.test/state?detail=full",
 			Header: secretHeader,
 		},
-		Invariant: engine.JSONIntegerMinimumInvariant{
-			Name:    "final stock must be non-negative",
-			Field:   "stock",
-			Minimum: 0,
+		Invariant: engine.Invariant{
+			JSONIntegerMinimum: &engine.JSONIntegerMinimumInvariant{
+				Name:    "final stock must be non-negative",
+				Field:   "stock",
+				Minimum: 0,
+			},
 		},
 	}
 }

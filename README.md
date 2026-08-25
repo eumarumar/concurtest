@@ -5,11 +5,12 @@ run concurrently, are retried, duplicated, reordered, or interrupted. It tests
 an application through its external interfaces, regardless of the language or
 framework used to build that application.
 
-The current v0 supports sequential reproducibility trials. Every trial resets
-the target, repeats one HTTP operation with bounded concurrency, observes final
-HTTP state, and evaluates one top-level JSON integer minimum invariant. An
-opt-in reduction pass can test smaller concurrent execution settings after a
-failure reproduces across a clean majority of trials.
+The current v0 supports sequential reproducibility trials. A trial can reset
+the target, repeat one HTTP operation with bounded concurrency, and evaluate
+one invariant. An invariant can check a top-level JSON integer observed after
+the operations or limit how many operation responses have successful HTTP
+statuses. An opt-in reduction pass can test smaller concurrent execution
+settings after a failure reproduces across a clean majority of trials.
 
 > [!WARNING]
 > ConcurTest intentionally sends concurrent requests that may change or damage
@@ -69,6 +70,34 @@ command uses execution overrides and disables another reduction pass:
 concurtest run --attempts 2 --concurrency 2 --no-reduce "examples/vulnerable-inventory/scenario.yaml"
 ```
 
+## Detect a failure hidden by final state
+
+The service also exposes an availability view that reports negative stock as
+zero. That view looks valid after the oversell, but it cannot erase the two
+purchase responses that were already accepted.
+
+Run the history-based scenario against the same service:
+
+```bash
+go run ./cmd/concurtest run examples/vulnerable-inventory/history-scenario.yaml
+```
+
+It limits successful purchase attempts to one and explicitly treats HTTP `201`
+as success:
+
+```yaml
+invariant:
+  name: accepted purchases must not exceed stock
+  maximum_successful_attempts: 1
+  successful_status_codes: [201]
+```
+
+If `successful_status_codes` is omitted, every HTTP status from `200` through
+`299` counts as success. The report identifies every successful attempt and
+which stable attempt IDs are beyond the configured maximum. This scenario also
+runs 10 trials and reduces the observed failure to two attempts at concurrency
+two.
+
 ## Why the example fails
 
 Each purchase checks that stock is available while holding a mutex. It then
@@ -83,7 +112,8 @@ race-detector clean and still be incorrect under concurrency.
 The example uses a two-request rendezvous to make this broken ordering
 repeatable within each trial. ConcurTest has no knowledge of that coordination;
 it interacts only through the HTTP requests declared in the
-[scenario](examples/vulnerable-inventory/scenario.yaml).
+[state scenario](examples/vulnerable-inventory/scenario.yaml) or
+[history scenario](examples/vulnerable-inventory/history-scenario.yaml).
 
 ## Development checks
 

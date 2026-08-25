@@ -15,7 +15,7 @@ const (
 	// RunOutcomePassed means the invariant held and every operation completed
 	// without an execution error.
 	RunOutcomePassed RunOutcome = "passed"
-	// RunOutcomeViolated means the observed state demonstrated an invariant
+	// RunOutcomeViolated means the recorded evidence demonstrated an invariant
 	// violation.
 	RunOutcomeViolated RunOutcome = "violated"
 	// RunOutcomeInconclusive means the invariant appeared to hold, but at least
@@ -24,15 +24,15 @@ const (
 )
 
 // Scenario describes the programmatic scenario supported by the initial
-// engine: optional setup, one repeated operation, one observation, and one
-// invariant.
+// engine: optional setup, one repeated operation, an optional observation, and
+// one invariant.
 type Scenario struct {
 	Setup       *HTTPRequest
 	Operation   Operation
 	Attempts    int
 	Concurrency int
-	Observation HTTPRequest
-	Invariant   JSONIntegerMinimumInvariant
+	Observation *HTTPRequest
+	Invariant   Invariant
 }
 
 // RunResult records each completed stage of a scenario run. Pointer fields are
@@ -89,26 +89,56 @@ func Run(
 		return result, fmt.Errorf("execute scenario operations: %w", err)
 	}
 
-	observation := ExecuteHTTP(ctx, client, scenario.Observation)
-	result.Observation = &observation
-	if err := requireSuccessfulStage("observation", observation); err != nil {
-		return result, err
-	}
-	if observation.Response.BodyTruncated {
-		return result, errors.New("observe scenario state: response body was truncated")
-	}
+	if scenario.Invariant.MaximumSuccessfulAttempts != nil {
+		evaluation, err := EvaluateMaximumSuccessfulAttempts(
+			*scenario.Invariant.MaximumSuccessfulAttempts,
+			history,
+		)
+		if err != nil {
+			return result, fmt.Errorf("evaluate scenario invariant: %w", err)
+		}
+		result.Evaluation = &InvariantEvaluation{
+			MaximumSuccessfulAttempts: &evaluation,
+			Violated:                  evaluation.Violated,
+		}
 
-	evaluation, err := EvaluateJSONIntegerMinimum(
-		scenario.Invariant,
-		observation.Response.Body,
-	)
-	if err != nil {
-		return result, fmt.Errorf("evaluate scenario invariant: %w", err)
+		if scenario.Observation != nil {
+			observation := ExecuteHTTP(ctx, client, *scenario.Observation)
+			result.Observation = &observation
+			if observationErr := requireSuccessfulStage("observation", observation); observationErr != nil {
+				if ctx.Err() != nil {
+					return result, observationErr
+				}
+				if !evaluation.Violated {
+					return result, observationErr
+				}
+			}
+		}
+	} else {
+		observation := ExecuteHTTP(ctx, client, *scenario.Observation)
+		result.Observation = &observation
+		if err := requireSuccessfulStage("observation", observation); err != nil {
+			return result, err
+		}
+		if observation.Response.BodyTruncated {
+			return result, errors.New("observe scenario state: response body was truncated")
+		}
+
+		evaluation, err := EvaluateJSONIntegerMinimum(
+			*scenario.Invariant.JSONIntegerMinimum,
+			observation.Response.Body,
+		)
+		if err != nil {
+			return result, fmt.Errorf("evaluate scenario invariant: %w", err)
+		}
+		result.Evaluation = &InvariantEvaluation{
+			JSONIntegerMinimum: &evaluation,
+			Violated:           evaluation.Violated,
+		}
 	}
-	result.Evaluation = &evaluation
 
 	switch {
-	case evaluation.Violated:
+	case result.Evaluation.Violated:
 		result.Outcome = RunOutcomeViolated
 	case historyHasExecutionErrors(history):
 		result.Outcome = RunOutcomeInconclusive
@@ -129,8 +159,11 @@ func validateRunInput(ctx context.Context, client *http.Client, scenario Scenari
 	); err != nil {
 		return fmt.Errorf("validate scenario execution: %w", err)
 	}
-	if err := validateJSONIntegerMinimumInvariant(scenario.Invariant); err != nil {
+	if err := validateInvariant(scenario.Invariant); err != nil {
 		return fmt.Errorf("validate scenario invariant: %w", err)
+	}
+	if scenario.Invariant.JSONIntegerMinimum != nil && scenario.Observation == nil {
+		return errors.New("validate scenario invariant: JSON integer minimum requires an observation")
 	}
 	return nil
 }
@@ -154,7 +187,7 @@ func requireSuccessfulStage(stage string, execution HTTPExecution) error {
 
 func historyHasExecutionErrors(history History) bool {
 	for _, attempt := range history.Attempts {
-		if attempt.Execution == nil || attempt.Execution.Err != nil {
+		if attempt.Execution == nil || attempt.Execution.Err != nil || attempt.Execution.Response == nil {
 			return true
 		}
 	}

@@ -19,9 +19,10 @@ A developer defines:
 3. how those operations should be exercised adversarially;
 4. which properties must remain true.
 
-ConcurTest executes the operations, records what occurred, observes the resulting state, evaluates the declared invariants, and reports violations.
+ConcurTest executes the operations, records what occurred, evaluates the
+declared invariant from history or observed state, and reports violations.
 
-Conceptually:
+The selected invariant determines which evaluation path is used:
 
 ```text
 Scenario
@@ -31,12 +32,11 @@ Operations
 Adversarial execution
     ↓
 Execution history
-    ↓
-State observation
-    ↓
-Invariant evaluation
-    ↓
-Failure reproduction/report
+    ├──→ History invariant evaluation ───┐
+    │                                    ├──→ Failure reproduction/report
+    └──→ State observation               │
+              ↓                          │
+         State invariant evaluation ─────┘
 ```
 
 ## Example
@@ -162,9 +162,18 @@ history.
 
 Execution history should be structured data, not only formatted terminal output.
 
+History-aware invariants evaluate recorded operation outcomes directly. The
+initial history invariant limits the number of attempts whose final HTTP status
+matches an explicit list, or the default 2xx range. It retains every qualifying
+attempt ID and the stable suffix beyond the configured maximum. Missing or
+failed executions do not count as successful; they keep a non-violating trial
+from being reported as a trustworthy pass.
+
 ### Observation
 
-An observation reads externally visible state from the target system.
+An observation reads externally visible state from the target system. It is
+required when the configured invariant evaluates state and optional when the
+invariant evaluates execution history.
 
 Initially this may be another HTTP request.
 
@@ -184,6 +193,11 @@ one seat cannot have multiple confirmed owners
 ```
 
 Invariant evaluation should be separate from transport execution.
+
+A scenario continues to declare exactly one invariant. The current concrete
+forms are a top-level JSON integer minimum and a maximum number of successful
+HTTP attempts. They are represented explicitly rather than through an
+expression language or plugin system.
 
 ### Failure
 

@@ -76,7 +76,7 @@ type documentConfig struct {
 	Setup          *requestConfig  `yaml:"setup"`
 	Operation      operationConfig `yaml:"operation"`
 	Execution      executionConfig `yaml:"execution"`
-	Observation    requestConfig   `yaml:"observation"`
+	Observation    *requestConfig  `yaml:"observation"`
 	Invariant      invariantConfig `yaml:"invariant"`
 }
 
@@ -112,9 +112,50 @@ type executionConfig struct {
 }
 
 type invariantConfig struct {
-	Name             strictString `yaml:"name"`
-	JSONIntegerField strictString `yaml:"json_integer_field"`
-	Minimum          *strictInt64 `yaml:"minimum"`
+	Name                      strictString  `yaml:"name"`
+	JSONIntegerField          strictString  `yaml:"json_integer_field"`
+	Minimum                   *strictInt64  `yaml:"minimum"`
+	MaximumSuccessfulAttempts *strictInt    `yaml:"maximum_successful_attempts"`
+	SuccessfulStatusCodes     strictIntList `yaml:"successful_status_codes"`
+}
+
+func (config *invariantConfig) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return errors.New("invariant must be a mapping")
+	}
+	known := map[string]struct{}{
+		"name":                        {},
+		"json_integer_field":          {},
+		"minimum":                     {},
+		"maximum_successful_attempts": {},
+		"successful_status_codes":     {},
+	}
+	seen := make(map[string]struct{}, len(node.Content)/2)
+	for index := 0; index < len(node.Content); index += 2 {
+		key := node.Content[index]
+		value := node.Content[index+1]
+		if key.Kind != yaml.ScalarNode || key.Tag != "!!str" {
+			return errors.New("invariant field names must be strings")
+		}
+		if _, exists := known[key.Value]; !exists {
+			return fmt.Errorf("field %s not found in type scenario.invariantConfig", key.Value)
+		}
+		if _, exists := seen[key.Value]; exists {
+			return fmt.Errorf("invariant field %q is repeated", key.Value)
+		}
+		seen[key.Value] = struct{}{}
+		if key.Value == "successful_status_codes" && value.Tag == "!!null" {
+			return errors.New("invariant.successful_status_codes must be a list of integers")
+		}
+	}
+
+	type plainInvariantConfig invariantConfig
+	var decoded plainInvariantConfig
+	if err := node.Decode(&decoded); err != nil {
+		return err
+	}
+	*config = invariantConfig(decoded)
+	return nil
 }
 
 type strictString string
@@ -170,6 +211,25 @@ func (value *strictInt64) UnmarshalYAML(node *yaml.Node) error {
 		return fmt.Errorf("must be a base-10 integer: %w", err)
 	}
 	*value = strictInt64(parsed)
+	return nil
+}
+
+type strictIntList struct {
+	configured bool
+	values     []strictInt
+}
+
+func (value *strictIntList) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.SequenceNode {
+		return errors.New("must be a list of integers")
+	}
+	value.configured = true
+	value.values = make([]strictInt, len(node.Content))
+	for index, item := range node.Content {
+		if err := item.Decode(&value.values[index]); err != nil {
+			return fmt.Errorf("entry %d must be an integer: %w", index+1, err)
+		}
+	}
 	return nil
 }
 
@@ -267,12 +327,12 @@ func (document documentConfig) definition() (Definition, error) {
 	if invariantName == "" {
 		return Definition{}, errors.New("invariant.name must not be empty")
 	}
-	invariantField := string(document.Invariant.JSONIntegerField)
-	if strings.TrimSpace(invariantField) == "" {
-		return Definition{}, errors.New("invariant.json_integer_field must not be empty")
+	invariant, err := document.Invariant.invariant(invariantName)
+	if err != nil {
+		return Definition{}, err
 	}
-	if document.Invariant.Minimum == nil {
-		return Definition{}, errors.New("invariant.minimum is required")
+	if invariant.JSONIntegerMinimum != nil && document.Observation == nil {
+		return Definition{}, errors.New("observation is required for a JSON integer minimum invariant")
 	}
 
 	var setup *engine.HTTPRequest
@@ -288,9 +348,13 @@ func (document documentConfig) definition() (Definition, error) {
 	if err != nil {
 		return Definition{}, err
 	}
-	observationRequest, err := document.Observation.httpRequest("observation", target)
-	if err != nil {
-		return Definition{}, err
+	var observation *engine.HTTPRequest
+	if document.Observation != nil {
+		request, err := document.Observation.httpRequest("observation", target)
+		if err != nil {
+			return Definition{}, err
+		}
+		observation = &request
 	}
 
 	return Definition{
@@ -307,14 +371,78 @@ func (document documentConfig) definition() (Definition, error) {
 			},
 			Attempts:    int(document.Execution.Attempts),
 			Concurrency: int(document.Execution.Concurrency),
-			Observation: observationRequest,
-			Invariant: engine.JSONIntegerMinimumInvariant{
-				Name:    invariantName,
-				Field:   invariantField,
-				Minimum: int64(*document.Invariant.Minimum),
-			},
+			Observation: observation,
+			Invariant:   invariant,
 		},
 	}, nil
+}
+
+func (config invariantConfig) invariant(name string) (engine.Invariant, error) {
+	fieldConfigured := strings.TrimSpace(string(config.JSONIntegerField)) != ""
+	minimumConfigured := config.Minimum != nil
+	maximumConfigured := config.MaximumSuccessfulAttempts != nil
+	statusesConfigured := config.SuccessfulStatusCodes.configured
+
+	if fieldConfigured || minimumConfigured {
+		if maximumConfigured || statusesConfigured {
+			return engine.Invariant{}, errors.New("invariant must define either JSON state fields or maximum successful attempts, not both")
+		}
+		if !fieldConfigured {
+			return engine.Invariant{}, errors.New("invariant.json_integer_field must not be empty")
+		}
+		if !minimumConfigured {
+			return engine.Invariant{}, errors.New("invariant.minimum is required")
+		}
+		definition := engine.JSONIntegerMinimumInvariant{
+			Name:    name,
+			Field:   string(config.JSONIntegerField),
+			Minimum: int64(*config.Minimum),
+		}
+		return engine.Invariant{JSONIntegerMinimum: &definition}, nil
+	}
+
+	if !maximumConfigured {
+		if statusesConfigured {
+			return engine.Invariant{}, errors.New("invariant.maximum_successful_attempts is required with successful_status_codes")
+		}
+		return engine.Invariant{}, errors.New("invariant must define json_integer_field and minimum or maximum_successful_attempts")
+	}
+	if *config.MaximumSuccessfulAttempts < 0 {
+		return engine.Invariant{}, errors.New("invariant.maximum_successful_attempts must not be negative")
+	}
+	if statusesConfigured && len(config.SuccessfulStatusCodes.values) == 0 {
+		return engine.Invariant{}, errors.New("invariant.successful_status_codes must not be empty when provided")
+	}
+
+	statuses := []int(nil)
+	if statusesConfigured {
+		statuses = make([]int, 0, len(config.SuccessfulStatusCodes.values))
+		seen := make(map[int]struct{}, len(config.SuccessfulStatusCodes.values))
+		for _, configured := range config.SuccessfulStatusCodes.values {
+			status := int(configured)
+			if status < 100 || status > 599 {
+				return engine.Invariant{}, fmt.Errorf(
+					"invariant.successful_status_codes entries must be between 100 and 599, got %d",
+					status,
+				)
+			}
+			if _, exists := seen[status]; exists {
+				return engine.Invariant{}, fmt.Errorf(
+					"invariant.successful_status_codes must not repeat HTTP status %d",
+					status,
+				)
+			}
+			seen[status] = struct{}{}
+			statuses = append(statuses, status)
+		}
+	}
+
+	definition := engine.MaximumSuccessfulAttemptsInvariant{
+		Name:                  name,
+		Maximum:               int(*config.MaximumSuccessfulAttempts),
+		SuccessfulStatusCodes: statuses,
+	}
+	return engine.Invariant{MaximumSuccessfulAttempts: &definition}, nil
 }
 
 func parseTarget(rawTarget string) (*url.URL, error) {

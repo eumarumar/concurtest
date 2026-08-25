@@ -376,7 +376,7 @@ func writeTrialEvidence(writer io.Writer, scenario engine.Scenario, trial engine
 	writeInvariant(writer, scenario.Invariant, trial.Run.Evaluation)
 	writeOptionalExecution(writer, "Setup", trial.Run.Setup)
 	writeAttempts(writer, trial.Run.History)
-	writeObservation(writer, trial.Run.Observation)
+	writeObservation(writer, scenario.Observation, trial.Run.Observation)
 }
 
 func writeRunProblem(writer io.Writer, runErr error) {
@@ -406,17 +406,82 @@ func writeTrialProblem(writer io.Writer, runErr error) {
 
 func writeInvariant(
 	writer io.Writer,
-	invariant engine.JSONIntegerMinimumInvariant,
+	invariant engine.Invariant,
 	evaluation *engine.InvariantEvaluation,
 ) {
 	fmt.Fprintln(writer, "\nInvariant:")
-	fmt.Fprintf(writer, "  Name: %s\n", quoted(invariant.Name))
-	fmt.Fprintf(writer, "  Expected: %s >= %d\n", quoted(invariant.Field), invariant.Minimum)
-	if evaluation == nil {
-		fmt.Fprintln(writer, "  Observed: not evaluated")
-		return
+	switch {
+	case invariant.JSONIntegerMinimum != nil:
+		definition := invariant.JSONIntegerMinimum
+		fmt.Fprintf(writer, "  Name: %s\n", quoted(definition.Name))
+		fmt.Fprintf(writer, "  Expected: %s >= %d\n", quoted(definition.Field), definition.Minimum)
+		if evaluation == nil || evaluation.JSONIntegerMinimum == nil {
+			fmt.Fprintln(writer, "  Observed: not evaluated")
+			return
+		}
+		fmt.Fprintf(
+			writer,
+			"  Observed: %s = %d\n",
+			quoted(definition.Field),
+			evaluation.JSONIntegerMinimum.Observed,
+		)
+	case invariant.MaximumSuccessfulAttempts != nil:
+		definition := invariant.MaximumSuccessfulAttempts
+		fmt.Fprintf(writer, "  Name: %s\n", quoted(definition.Name))
+		fmt.Fprintf(
+			writer,
+			"  Expected: at most %d successful %s\n",
+			definition.Maximum,
+			attemptWord(definition.Maximum),
+		)
+		fmt.Fprintf(writer, "  Successful statuses: %s\n", successfulStatuses(definition.SuccessfulStatusCodes))
+		if evaluation == nil || evaluation.MaximumSuccessfulAttempts == nil {
+			fmt.Fprintln(writer, "  Observed: not evaluated")
+			return
+		}
+		historyEvaluation := evaluation.MaximumSuccessfulAttempts
+		fmt.Fprintf(
+			writer,
+			"  Observed: %d successful %s\n",
+			len(historyEvaluation.SuccessfulAttemptIDs),
+			attemptWord(len(historyEvaluation.SuccessfulAttemptIDs)),
+		)
+		fmt.Fprintf(writer, "  Successful attempts: %s\n", attemptIDs(historyEvaluation.SuccessfulAttemptIDs))
+		fmt.Fprintf(writer, "  Beyond maximum: %s\n", attemptIDs(historyEvaluation.OverLimitAttemptIDs))
 	}
-	fmt.Fprintf(writer, "  Observed: %s = %d\n", quoted(invariant.Field), evaluation.Observed)
+}
+
+func successfulStatuses(statuses []int) string {
+	if statuses == nil {
+		return "HTTP 200-299 (default)"
+	}
+	formatted := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		label := fmt.Sprintf("HTTP %d", status)
+		if text := http.StatusText(status); text != "" {
+			label += " " + text
+		}
+		formatted = append(formatted, label)
+	}
+	return strings.Join(formatted, ", ")
+}
+
+func attemptIDs(ids []int) string {
+	if len(ids) == 0 {
+		return "none"
+	}
+	formatted := make([]string, len(ids))
+	for index, id := range ids {
+		formatted[index] = fmt.Sprintf("#%d", id)
+	}
+	return strings.Join(formatted, ", ")
+}
+
+func attemptWord(count int) string {
+	if count == 1 {
+		return "attempt"
+	}
+	return "attempts"
 }
 
 func writeOptionalExecution(writer io.Writer, label string, execution *engine.HTTPExecution) {
@@ -444,8 +509,16 @@ func writeAttempts(writer io.Writer, history engine.History) {
 	}
 }
 
-func writeObservation(writer io.Writer, execution *engine.HTTPExecution) {
+func writeObservation(
+	writer io.Writer,
+	configured *engine.HTTPRequest,
+	execution *engine.HTTPExecution,
+) {
 	fmt.Fprintln(writer, "\nObservation:")
+	if configured == nil {
+		fmt.Fprintln(writer, "  Not configured.")
+		return
+	}
 	if execution == nil {
 		fmt.Fprintln(writer, "  Not reached.")
 		return

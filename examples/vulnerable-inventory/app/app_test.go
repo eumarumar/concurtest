@@ -68,6 +68,10 @@ func TestHandlerDeterministicallyOversellsInventory(t *testing.T) {
 	if observed.status != http.StatusOK || observed.body != `{"stock":-1}`+"\n" {
 		t.Fatalf("final state = status %d body %q, want status 200 and stock -1", observed.status, observed.body)
 	}
+	available := requestResultFor(t, ctx, server.Client(), http.MethodGet, server.URL+"/available-stock")
+	if available.status != http.StatusOK || available.body != `{"stock":0}`+"\n" {
+		t.Fatalf("available stock = status %d body %q, want status 200 and stock 0", available.status, available.body)
+	}
 
 	rejected := requestResultFor(t, ctx, server.Client(), http.MethodPost, server.URL+"/purchase")
 	if rejected.status != http.StatusConflict || !strings.Contains(rejected.body, purchaseUnavailableReason) {
@@ -146,6 +150,7 @@ func TestHandlerUsesMethodSpecificRoutes(t *testing.T) {
 		{method: http.MethodGet, path: "/reset", want: http.StatusMethodNotAllowed},
 		{method: http.MethodGet, path: "/purchase", want: http.StatusMethodNotAllowed},
 		{method: http.MethodPost, path: "/state", want: http.StatusMethodNotAllowed},
+		{method: http.MethodPost, path: "/available-stock", want: http.StatusMethodNotAllowed},
 		{method: http.MethodGet, path: "/missing", want: http.StatusNotFound},
 	}
 

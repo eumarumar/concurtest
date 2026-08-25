@@ -59,11 +59,13 @@ func TestRunExecutesSetupOperationsObservationAndFindsViolation(t *testing.T) {
 		},
 		Attempts:    2,
 		Concurrency: 2,
-		Observation: engine.HTTPRequest{Method: http.MethodGet, URL: server.URL + "/state"},
-		Invariant: engine.JSONIntegerMinimumInvariant{
-			Name:    "stock must be non-negative",
-			Field:   "stock",
-			Minimum: 0,
+		Observation: &engine.HTTPRequest{Method: http.MethodGet, URL: server.URL + "/state"},
+		Invariant: engine.Invariant{
+			JSONIntegerMinimum: &engine.JSONIntegerMinimumInvariant{
+				Name:    "stock must be non-negative",
+				Field:   "stock",
+				Minimum: 0,
+			},
 		},
 	})
 	if err != nil {
@@ -85,7 +87,9 @@ func TestRunExecutesSetupOperationsObservationAndFindsViolation(t *testing.T) {
 	if result.Evaluation == nil {
 		t.Fatal("evaluation was not recorded")
 	}
-	if result.Evaluation.Observed != -1 || !result.Evaluation.Violated {
+	if result.Evaluation.JSONIntegerMinimum == nil ||
+		result.Evaluation.JSONIntegerMinimum.Observed != -1 ||
+		!result.Evaluation.Violated {
 		t.Errorf("evaluation = %#v, want observed -1 violation", result.Evaluation)
 	}
 	if result.StartedAt.IsZero() || result.CompletedAt.IsZero() || result.Duration() < 0 {
@@ -139,6 +143,133 @@ func TestRunClassifiesPassAndInconclusiveOperationErrors(t *testing.T) {
 			}
 			if result.Setup != nil {
 				t.Errorf("setup = %#v, want nil", result.Setup)
+			}
+			if result.Outcome != test.wantOutcome {
+				t.Errorf("outcome = %q, want %q", result.Outcome, test.wantOutcome)
+			}
+		})
+	}
+}
+
+func TestRunEvaluatesMaximumSuccessfulAttemptsWithoutObservation(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		if calls.Add(1) == 1 {
+			return testHTTPResponse(http.StatusCreated, "accepted"), nil
+		}
+		return testHTTPResponse(http.StatusConflict, "rejected"), nil
+	})}
+	scenario := maximumSuccessfulAttemptsScenario(0)
+	scenario.Attempts = 2
+
+	result, err := engine.Run(context.Background(), client, scenario)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Errorf("HTTP calls = %d, want only 2 operation calls", calls.Load())
+	}
+	if result.Observation != nil {
+		t.Errorf("observation = %#v, want nil", result.Observation)
+	}
+	if result.Outcome != engine.RunOutcomeViolated || result.Evaluation == nil ||
+		result.Evaluation.MaximumSuccessfulAttempts == nil {
+		t.Fatalf("result = %#v, want history violation", result)
+	}
+	evaluation := result.Evaluation.MaximumSuccessfulAttempts
+	if len(evaluation.SuccessfulAttemptIDs) != 1 || evaluation.SuccessfulAttemptIDs[0] != 1 ||
+		len(evaluation.OverLimitAttemptIDs) != 1 || evaluation.OverLimitAttemptIDs[0] != 1 {
+		t.Errorf("evaluation = %#v, want attempt 1 successful and over limit", evaluation)
+	}
+}
+
+func TestRunMaximumSuccessfulAttemptsOutcomePrecedence(t *testing.T) {
+	t.Parallel()
+
+	operationErr := errors.New("operation unavailable")
+	observationErr := errors.New("observation unavailable")
+	type operationReply struct {
+		status int
+		err    error
+	}
+	tests := []struct {
+		name             string
+		maximum          int
+		operationReplies []operationReply
+		observationReply func() (*http.Response, error)
+		wantOutcome      engine.RunOutcome
+		wantErr          bool
+	}{
+		{
+			name:             "violation over operation error",
+			maximum:          0,
+			operationReplies: []operationReply{{status: http.StatusCreated}, {err: operationErr}},
+			wantOutcome:      engine.RunOutcomeViolated,
+		},
+		{
+			name:             "clean history with operation error is inconclusive",
+			maximum:          1,
+			operationReplies: []operationReply{{status: http.StatusCreated}, {err: operationErr}},
+			wantOutcome:      engine.RunOutcomeInconclusive,
+		},
+		{
+			name:             "violation over optional observation error",
+			maximum:          0,
+			operationReplies: []operationReply{{status: http.StatusCreated}},
+			observationReply: func() (*http.Response, error) { return nil, observationErr },
+			wantOutcome:      engine.RunOutcomeViolated,
+		},
+		{
+			name:             "passing history with optional observation error is errored",
+			maximum:          1,
+			operationReplies: []operationReply{{status: http.StatusCreated}},
+			observationReply: func() (*http.Response, error) { return nil, observationErr },
+			wantErr:          true,
+		},
+		{
+			name:             "truncated optional observation does not affect pass",
+			maximum:          1,
+			operationReplies: []operationReply{{status: http.StatusCreated}},
+			observationReply: func() (*http.Response, error) {
+				return testHTTPResponse(http.StatusOK, strings.Repeat("x", engine.MaxHTTPBodyBytes+1)), nil
+			},
+			wantOutcome: engine.RunOutcomePassed,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var operationCall atomic.Int32
+			client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Path == "/state" {
+					return test.observationReply()
+				}
+				reply := test.operationReplies[int(operationCall.Add(1))-1]
+				if reply.err != nil {
+					return nil, reply.err
+				}
+				return testHTTPResponse(reply.status, "operation"), nil
+			})}
+			scenario := maximumSuccessfulAttemptsScenario(test.maximum)
+			scenario.Attempts = len(test.operationReplies)
+			if test.observationReply != nil {
+				scenario.Observation = &engine.HTTPRequest{Method: http.MethodGet, URL: "http://example.test/state"}
+			}
+
+			result, err := engine.Run(context.Background(), client, scenario)
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("Run() error = nil, want observation error")
+				}
+				if result.Evaluation == nil || result.Observation == nil {
+					t.Errorf("partial evidence was not retained: %#v", result)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
 			}
 			if result.Outcome != test.wantOutcome {
 				t.Errorf("outcome = %q, want %q", result.Outcome, test.wantOutcome)
@@ -333,6 +464,56 @@ func TestRunCancellationSkipsObservation(t *testing.T) {
 	}
 }
 
+func TestRunCancellationDuringOptionalObservationPreservesHistoryEvaluation(t *testing.T) {
+	t.Parallel()
+
+	observationStarted := make(chan struct{})
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/purchase" {
+			return testHTTPResponse(http.StatusCreated, "accepted"), nil
+		}
+		close(observationStarted)
+		<-request.Context().Done()
+		return nil, request.Context().Err()
+	})}
+	ctx, cancel := context.WithCancel(context.Background())
+	scenario := maximumSuccessfulAttemptsScenario(0)
+	scenario.Observation = &engine.HTTPRequest{Method: http.MethodGet, URL: "http://example.test/state"}
+
+	type runResponse struct {
+		result engine.RunResult
+		err    error
+	}
+	done := make(chan runResponse, 1)
+	go func() {
+		result, err := engine.Run(ctx, client, scenario)
+		done <- runResponse{result: result, err: err}
+	}()
+
+	select {
+	case <-observationStarted:
+		cancel()
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("optional observation did not start")
+	}
+
+	select {
+	case response := <-done:
+		if !errors.Is(response.err, context.Canceled) {
+			t.Fatalf("Run() error = %v, want context.Canceled", response.err)
+		}
+		if response.result.Evaluation == nil ||
+			response.result.Evaluation.MaximumSuccessfulAttempts == nil ||
+			!response.result.Evaluation.Violated ||
+			response.result.Observation == nil {
+			t.Errorf("partial history and observation evidence was not retained: %#v", response.result)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() did not return after observation cancellation")
+	}
+}
+
 func TestRunValidatesBeforeSetup(t *testing.T) {
 	t.Parallel()
 
@@ -344,7 +525,7 @@ func TestRunValidatesBeforeSetup(t *testing.T) {
 	setup := engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/setup"}
 	scenario := scenarioWithoutSetup()
 	scenario.Setup = &setup
-	scenario.Invariant.Name = ""
+	scenario.Invariant.JSONIntegerMinimum.Name = ""
 
 	result, err := engine.Run(context.Background(), client, scenario)
 	if err == nil {
@@ -358,6 +539,65 @@ func TestRunValidatesBeforeSetup(t *testing.T) {
 	}
 }
 
+func TestRunValidatesInvariantVariantBeforeRequests(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		change func(*engine.Scenario)
+	}{
+		{
+			name: "no invariant",
+			change: func(scenario *engine.Scenario) {
+				scenario.Invariant = engine.Invariant{}
+			},
+		},
+		{
+			name: "two invariants",
+			change: func(scenario *engine.Scenario) {
+				scenario.Invariant.MaximumSuccessfulAttempts = &engine.MaximumSuccessfulAttemptsInvariant{
+					Name:    "at most one success",
+					Maximum: 1,
+				}
+			},
+		},
+		{
+			name: "state invariant without observation",
+			change: func(scenario *engine.Scenario) {
+				scenario.Observation = nil
+			},
+		},
+		{
+			name: "invalid successful status",
+			change: func(scenario *engine.Scenario) {
+				*scenario = maximumSuccessfulAttemptsScenario(1)
+				scenario.Invariant.MaximumSuccessfulAttempts.SuccessfulStatusCodes = []int{600}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var calls atomic.Int32
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				calls.Add(1)
+				return testHTTPResponse(http.StatusNoContent, ""), nil
+			})}
+			scenario := scenarioWithoutSetup()
+			setup := engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/setup"}
+			scenario.Setup = &setup
+			test.change(&scenario)
+
+			if _, err := engine.Run(context.Background(), client, scenario); err == nil {
+				t.Fatal("Run() error = nil, want validation error")
+			}
+			if calls.Load() != 0 {
+				t.Errorf("HTTP calls = %d, want 0", calls.Load())
+			}
+		})
+	}
+}
+
 func scenarioWithoutSetup() engine.Scenario {
 	return engine.Scenario{
 		Operation: engine.Operation{
@@ -366,11 +606,31 @@ func scenarioWithoutSetup() engine.Scenario {
 		},
 		Attempts:    1,
 		Concurrency: 1,
-		Observation: engine.HTTPRequest{Method: http.MethodGet, URL: "http://example.test/state"},
-		Invariant: engine.JSONIntegerMinimumInvariant{
-			Name:    "stock must be non-negative",
-			Field:   "stock",
-			Minimum: 0,
+		Observation: &engine.HTTPRequest{Method: http.MethodGet, URL: "http://example.test/state"},
+		Invariant: engine.Invariant{
+			JSONIntegerMinimum: &engine.JSONIntegerMinimumInvariant{
+				Name:    "stock must be non-negative",
+				Field:   "stock",
+				Minimum: 0,
+			},
+		},
+	}
+}
+
+func maximumSuccessfulAttemptsScenario(maximum int) engine.Scenario {
+	return engine.Scenario{
+		Operation: engine.Operation{
+			Name:    "purchase",
+			Request: engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/purchase"},
+		},
+		Attempts:    1,
+		Concurrency: 1,
+		Invariant: engine.Invariant{
+			MaximumSuccessfulAttempts: &engine.MaximumSuccessfulAttemptsInvariant{
+				Name:                  "accepted purchases must not exceed stock",
+				Maximum:               maximum,
+				SuccessfulStatusCodes: []int{http.StatusCreated},
+			},
 		},
 	}
 }

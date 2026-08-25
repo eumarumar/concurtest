@@ -412,11 +412,13 @@ func reductionScenario(attempts, concurrency int) engine.Scenario {
 		},
 		Attempts:    attempts,
 		Concurrency: concurrency,
-		Observation: engine.HTTPRequest{Method: http.MethodGet, URL: "http://example.test/state"},
-		Invariant: engine.JSONIntegerMinimumInvariant{
-			Name:    "stock must be non-negative",
-			Field:   "stock",
-			Minimum: 0,
+		Observation: &engine.HTTPRequest{Method: http.MethodGet, URL: "http://example.test/state"},
+		Invariant: engine.Invariant{
+			JSONIntegerMinimum: &engine.JSONIntegerMinimumInvariant{
+				Name:    "stock must be non-negative",
+				Field:   "stock",
+				Minimum: 0,
+			},
 		},
 	}
 }

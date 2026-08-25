@@ -57,6 +57,7 @@ func (inventory *inventory) handler() http.Handler {
 	mux.HandleFunc("POST /reset", inventory.reset)
 	mux.HandleFunc("POST /purchase", inventory.purchase)
 	mux.HandleFunc("GET /state", inventory.observe)
+	mux.HandleFunc("GET /available-stock", inventory.observeAvailableStock)
 	return mux
 }
 
@@ -125,7 +126,20 @@ func (inventory *inventory) observe(writer http.ResponseWriter, _ *http.Request)
 	inventory.mu.Lock()
 	stock := inventory.stock
 	inventory.mu.Unlock()
+	inventory.writeStock(writer, stock)
+}
 
+// observeAvailableStock represents a plausible public projection that never
+// exposes negative availability. It intentionally hides the oversell that the
+// operation history invariant is designed to retain.
+func (inventory *inventory) observeAvailableStock(writer http.ResponseWriter, _ *http.Request) {
+	inventory.mu.Lock()
+	stock := max(inventory.stock, 0)
+	inventory.mu.Unlock()
+	inventory.writeStock(writer, stock)
+}
+
+func (inventory *inventory) writeStock(writer http.ResponseWriter, stock int) {
 	writer.Header().Set("Content-Type", "application/json")
 	if _, err := fmt.Fprintf(writer, `{"stock":%d}`+"\n", stock); err != nil {
 		return

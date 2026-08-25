@@ -1,6 +1,9 @@
 package engine_test
 
 import (
+	"errors"
+	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/eumarumar/concurtest/internal/engine"
@@ -62,6 +65,99 @@ func TestEvaluateJSONIntegerMinimum(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEvaluateMaximumSuccessfulAttempts(t *testing.T) {
+	t.Parallel()
+
+	transportErr := errors.New("network unavailable")
+	history := engine.History{Attempts: []engine.Attempt{
+		{ID: 1, Execution: executionWithStatus(http.StatusCreated)},
+		{ID: 2, Execution: executionWithStatus(http.StatusConflict)},
+		{ID: 3, Execution: &engine.HTTPExecution{Err: transportErr}},
+		{ID: 4},
+		{ID: 5, Execution: executionWithStatus(http.StatusOK)},
+	}}
+
+	tests := []struct {
+		name       string
+		invariant  engine.MaximumSuccessfulAttemptsInvariant
+		successful []int
+		overLimit  []int
+		violated   bool
+	}{
+		{
+			name: "default 2xx statuses",
+			invariant: engine.MaximumSuccessfulAttemptsInvariant{
+				Name:    "at most one accepted purchase",
+				Maximum: 1,
+			},
+			successful: []int{1, 5},
+			overLimit:  []int{5},
+			violated:   true,
+		},
+		{
+			name: "explicit status can be outside 2xx",
+			invariant: engine.MaximumSuccessfulAttemptsInvariant{
+				Name:                  "at most one conflict",
+				Maximum:               1,
+				SuccessfulStatusCodes: []int{http.StatusConflict},
+			},
+			successful: []int{2},
+		},
+		{
+			name: "zero maximum",
+			invariant: engine.MaximumSuccessfulAttemptsInvariant{
+				Name:                  "no accepted purchases",
+				Maximum:               0,
+				SuccessfulStatusCodes: []int{http.StatusCreated},
+			},
+			successful: []int{1},
+			overLimit:  []int{1},
+			violated:   true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			evaluation, err := engine.EvaluateMaximumSuccessfulAttempts(test.invariant, history)
+			if err != nil {
+				t.Fatalf("EvaluateMaximumSuccessfulAttempts() error = %v", err)
+			}
+			if !reflect.DeepEqual(evaluation.SuccessfulAttemptIDs, test.successful) {
+				t.Errorf("successful attempt IDs = %v, want %v", evaluation.SuccessfulAttemptIDs, test.successful)
+			}
+			if !reflect.DeepEqual(evaluation.OverLimitAttemptIDs, test.overLimit) {
+				t.Errorf("over-limit attempt IDs = %v, want %v", evaluation.OverLimitAttemptIDs, test.overLimit)
+			}
+			if evaluation.Violated != test.violated {
+				t.Errorf("violated = %t, want %t", evaluation.Violated, test.violated)
+			}
+		})
+	}
+}
+
+func TestEvaluateMaximumSuccessfulAttemptsRejectsInvalidDefinition(t *testing.T) {
+	t.Parallel()
+
+	tests := []engine.MaximumSuccessfulAttemptsInvariant{
+		{Maximum: 1},
+		{Name: "empty explicit statuses", Maximum: 1, SuccessfulStatusCodes: []int{}},
+		{Name: "negative maximum", Maximum: -1},
+		{Name: "low status", Maximum: 1, SuccessfulStatusCodes: []int{99}},
+		{Name: "high status", Maximum: 1, SuccessfulStatusCodes: []int{600}},
+		{Name: "duplicate status", Maximum: 1, SuccessfulStatusCodes: []int{201, 201}},
+	}
+
+	for _, invariant := range tests {
+		if _, err := engine.EvaluateMaximumSuccessfulAttempts(invariant, engine.History{}); err == nil {
+			t.Errorf("EvaluateMaximumSuccessfulAttempts(%#v) error = nil, want validation error", invariant)
+		}
+	}
+}
+
+func executionWithStatus(status int) *engine.HTTPExecution {
+	return &engine.HTTPExecution{Response: &engine.HTTPResponse{StatusCode: status}}
 }
 
 func TestEvaluateJSONIntegerMinimumRejectsInvalidDefinition(t *testing.T) {

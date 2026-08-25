@@ -73,12 +73,17 @@ func TestDecodeValidScenario(t *testing.T) {
 			definition.Scenario.Concurrency,
 		)
 	}
+	if definition.Scenario.Observation == nil {
+		t.Fatal("observation request is nil")
+	}
 	if definition.Scenario.Observation.URL != "http://127.0.0.1:8080/state" {
 		t.Errorf("observation URL = %q", definition.Scenario.Observation.URL)
 	}
-	if definition.Scenario.Invariant.Name != "final stock must be non-negative" ||
-		definition.Scenario.Invariant.Field != "stock" ||
-		definition.Scenario.Invariant.Minimum != 0 {
+	jsonInvariant := definition.Scenario.Invariant.JSONIntegerMinimum
+	if jsonInvariant == nil ||
+		jsonInvariant.Name != "final stock must be non-negative" ||
+		jsonInvariant.Field != "stock" ||
+		jsonInvariant.Minimum != 0 {
 		t.Errorf("invariant = %#v", definition.Scenario.Invariant)
 	}
 }
@@ -131,6 +136,88 @@ func TestDecodeProducesRunnableScenario(t *testing.T) {
 	}
 	if result.Status != engine.TrialStatusViolated {
 		t.Errorf("status = %q, want %q", result.Status, engine.TrialStatusViolated)
+	}
+}
+
+func TestDecodeMaximumSuccessfulAttemptsInvariant(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		document     string
+		wantStatuses []int
+		observation  bool
+	}{
+		{
+			name:        "default 2xx without observation",
+			document:    historyInvariantYAML("http://example.test", ""),
+			observation: false,
+		},
+		{
+			name: "explicit statuses with observation",
+			document: strings.Replace(
+				historyInvariantYAML("http://example.test", "  successful_status_codes: [201, 202]\n"),
+				"invariant:\n",
+				"observation:\n  method: GET\n  path: /state\n\ninvariant:\n",
+				1,
+			),
+			wantStatuses: []int{201, 202},
+			observation:  true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			definition, err := scenario.Decode(strings.NewReader(test.document))
+			if err != nil {
+				t.Fatalf("Decode() error = %v", err)
+			}
+			invariant := definition.Scenario.Invariant.MaximumSuccessfulAttempts
+			if invariant == nil {
+				t.Fatalf("invariant = %#v, want maximum successful attempts", definition.Scenario.Invariant)
+			}
+			if invariant.Name != "accepted purchases must not exceed stock" || invariant.Maximum != 1 {
+				t.Errorf("invariant = %#v", invariant)
+			}
+			if fmt.Sprint(invariant.SuccessfulStatusCodes) != fmt.Sprint(test.wantStatuses) {
+				t.Errorf("successful statuses = %v, want %v", invariant.SuccessfulStatusCodes, test.wantStatuses)
+			}
+			if (definition.Scenario.Observation != nil) != test.observation {
+				t.Errorf("observation configured = %t, want %t", definition.Scenario.Observation != nil, test.observation)
+			}
+		})
+	}
+}
+
+func TestDecodeRejectsInvalidMaximumSuccessfulAttemptsInvariant(t *testing.T) {
+	t.Parallel()
+
+	valid := historyInvariantYAML("http://example.test", "")
+	tests := []struct {
+		name     string
+		document string
+	}{
+		{name: "negative maximum", document: strings.Replace(valid, "maximum_successful_attempts: 1", "maximum_successful_attempts: -1", 1)},
+		{name: "fractional maximum", document: strings.Replace(valid, "maximum_successful_attempts: 1", "maximum_successful_attempts: 1.5", 1)},
+		{name: "empty statuses", document: strings.Replace(valid, "  maximum_successful_attempts: 1\n", "  maximum_successful_attempts: 1\n  successful_status_codes: []\n", 1)},
+		{name: "null statuses", document: strings.Replace(valid, "  maximum_successful_attempts: 1\n", "  maximum_successful_attempts: 1\n  successful_status_codes: null\n", 1)},
+		{name: "low status", document: strings.Replace(valid, "  maximum_successful_attempts: 1\n", "  maximum_successful_attempts: 1\n  successful_status_codes: [99]\n", 1)},
+		{name: "high status", document: strings.Replace(valid, "  maximum_successful_attempts: 1\n", "  maximum_successful_attempts: 1\n  successful_status_codes: [600]\n", 1)},
+		{name: "duplicate status", document: strings.Replace(valid, "  maximum_successful_attempts: 1\n", "  maximum_successful_attempts: 1\n  successful_status_codes: [201, 201]\n", 1)},
+		{name: "fractional status", document: strings.Replace(valid, "  maximum_successful_attempts: 1\n", "  maximum_successful_attempts: 1\n  successful_status_codes: [201.0]\n", 1)},
+		{name: "string status", document: strings.Replace(valid, "  maximum_successful_attempts: 1\n", "  maximum_successful_attempts: 1\n  successful_status_codes: ['201']\n", 1)},
+		{name: "status without maximum", document: strings.Replace(valid, "  maximum_successful_attempts: 1\n", "  successful_status_codes: [201]\n", 1)},
+		{name: "mixed invariant definitions", document: strings.Replace(valid, "  maximum_successful_attempts: 1\n", "  maximum_successful_attempts: 1\n  json_integer_field: stock\n  minimum: 0\n", 1)},
+		{name: "missing invariant definition", document: strings.Replace(valid, "  maximum_successful_attempts: 1\n", "", 1)},
+		{name: "state invariant without observation", document: strings.Replace(validYAML("http://example.test"), "observation:\n  method: GET\n  path: /state\n\n", "", 1)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := scenario.Decode(strings.NewReader(test.document)); err == nil {
+				t.Fatal("Decode() error = nil, want validation error")
+			}
+		})
 	}
 }
 
@@ -240,4 +327,26 @@ invariant:
   json_integer_field: stock
   minimum: 0
 `, target)
+}
+
+func historyInvariantYAML(target, statusLine string) string {
+	return fmt.Sprintf(`version: 1
+name: inventory accepted purchases
+target: %s
+request_timeout: 2s
+
+operation:
+  name: purchase
+  method: POST
+  path: /purchase
+
+execution:
+  attempts: 2
+  concurrency: 2
+  trials: 1
+
+invariant:
+  name: accepted purchases must not exceed stock
+  maximum_successful_attempts: 1
+%s`, target, statusLine)
 }

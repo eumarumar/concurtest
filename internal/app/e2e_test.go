@@ -22,7 +22,7 @@ func TestVulnerableInventoryEndToEnd(t *testing.T) {
 
 	server := httptest.NewServer(inventoryapp.NewHandler())
 	t.Cleanup(server.Close)
-	scenarioPath := scenarioForTarget(t, server.URL)
+	scenarioPath := scenarioForTarget(t, "scenario.yaml", server.URL)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -96,9 +96,66 @@ func TestVulnerableInventoryEndToEnd(t *testing.T) {
 	}
 }
 
-func scenarioForTarget(t *testing.T, target string) string {
+func TestVulnerableInventoryHistoryEndToEnd(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(inventoryapp.NewHandler())
+	t.Cleanup(server.Close)
+	scenarioPath := scenarioForTarget(t, "history-scenario.yaml", server.URL)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var stdout, stderr bytes.Buffer
+	exitCode := app.Run(ctx, []string{"run", scenarioPath}, &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf(
+			"Run() exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s",
+			exitCode,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want empty", stderr.String())
+	}
+
+	report := stdout.String()
+	assertOutputContains(t, report,
+		`Scenario: "inventory accepted purchases"`,
+		"Target: "+server.URL,
+		"Result: VIOLATED",
+		"Trials: 10",
+		"Completed: 10",
+		"Violations: 10 of 10 completed trials",
+		"First violation: trial 1",
+		"Reduction: REDUCED",
+		"Candidates evaluated: 1",
+		"Smallest observed failure:",
+		"Attempts: 2",
+		"Concurrency: 2",
+		"Violations: 10 of 10 trials",
+		"Expected: at most 1 successful attempt",
+		"Successful statuses: HTTP 201 Created",
+		"Observed: 2 successful attempts",
+		"Successful attempts: #1, #2",
+		"Beyond maximum: #2",
+		`Response: "{\"stock\":0}\n"`,
+		"Reproduce: concurtest run --attempts 2 --concurrency 2 --no-reduce "+fmt.Sprintf("%q", scenarioPath),
+	)
+	if count := strings.Count(report, "Beyond maximum: #2"); count != 10 {
+		t.Errorf("over-limit evidence sections = %d, want 10\n%s", count, report)
+	}
+	if count := strings.Count(report, "Status: HTTP 201 Created"); count != 20 {
+		t.Errorf("successful purchase statuses = %d, want 20\n%s", count, report)
+	}
+	if count := strings.Count(report, "evidence (VIOLATED):"); count != 10 {
+		t.Errorf("violation evidence sections = %d, want 10\n%s", count, report)
+	}
+}
+
+func scenarioForTarget(t *testing.T, scenarioName, target string) string {
 	t.Helper()
-	path := filepath.Join("..", "..", "examples", "vulnerable-inventory", "scenario.yaml")
+	path := filepath.Join("..", "..", "examples", "vulnerable-inventory", scenarioName)
 	document, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read published scenario: %v", err)
