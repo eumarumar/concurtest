@@ -286,6 +286,37 @@ The CLI should remain thin.
 
 Business logic belongs in reusable internal packages rather than directly inside CLI commands.
 
+## Reporting contract
+
+The CLI defaults to a human-readable text report and provides one explicit JSON
+format for automation. Both formats consume the same structured engine and
+reduction results and preserve the same exit status meanings: pass, demonstrated
+violation, or incomplete/untrustworthy execution.
+
+JSON has two discriminated top-level forms: a run report and an early error
+report. Run reports contain scenario metadata, aggregate counts, every trial in
+stable one-based order, complete run and invariant evidence, reduction
+summaries and retained candidate trials, errors, timing, and reproduction
+arguments. Early error reports cover command and scenario-loading failures for
+which no trustworthy trial result exists.
+
+Errors cross package boundaries as a small typed tree with a stable code,
+human-readable message, and ordered causes. Standard context cancellation and
+deadline errors retain their Go identity while receiving distinct report codes.
+This keeps text useful to people without requiring CI consumers to parse error
+strings.
+
+The checked-in JSON Schema uses semantic versions and closed objects. The
+initial contract is `1.0.0`; changing emitted fields or their shapes requires a
+new major version. Schema validation is a test concern, not a runtime dependency
+of the reporter.
+
+Report evidence stays bounded and safe. Response excerpts retain at most 512
+bytes and identify UTF-8 or base64 encoding plus truncation. HTTP headers and
+request bodies are never emitted. The top-level baseline is not duplicated
+inside reduction output; rejected candidates retain summaries, while selected
+or interrupted candidates may retain their complete ordered trials.
+
 ## Performance
 
 ConcurTest should efficiently run many simultaneous network operations, but raw throughput is not the primary product goal.

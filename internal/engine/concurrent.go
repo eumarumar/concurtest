@@ -2,12 +2,13 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/eumarumar/concurtest/internal/failure"
 )
 
 // Operation describes one named HTTP operation.
@@ -111,7 +112,7 @@ func ExecuteConcurrent(
 	history.CompletedAt = time.Now()
 
 	if err := ctx.Err(); err != nil {
-		return history, fmt.Errorf("execute concurrent operation: %w", err)
+		return history, failure.Wrap(failure.CodeOperationBatchFailed, "execute concurrent operation", err)
 	}
 	return history, nil
 }
@@ -124,28 +125,33 @@ func validateConcurrentInput(
 	concurrency int,
 ) error {
 	if ctx == nil {
-		return errors.New("execute concurrent operation: nil context")
+		return failure.New(failure.CodeInvalidExecution, "execute concurrent operation: nil context")
 	}
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("execute concurrent operation: %w", err)
+		return failure.Wrap(failure.CodeOperationBatchFailed, "execute concurrent operation", err)
 	}
 	if client == nil {
-		return errors.New("execute concurrent operation: nil client")
+		return failure.New(failure.CodeInvalidExecution, "execute concurrent operation: nil client")
 	}
 	if strings.TrimSpace(operation.Name) == "" {
-		return errors.New("execute concurrent operation: empty operation name")
+		return failure.New(failure.CodeInvalidExecution, "execute concurrent operation: empty operation name")
 	}
 	if attempts <= 0 {
-		return fmt.Errorf("execute concurrent operation: attempts must be positive: %d", attempts)
+		return failure.New(
+			failure.CodeInvalidExecution,
+			fmt.Sprintf("execute concurrent operation: attempts must be positive: %d", attempts),
+		)
 	}
 	if concurrency <= 0 {
-		return fmt.Errorf("execute concurrent operation: concurrency must be positive: %d", concurrency)
+		return failure.New(
+			failure.CodeInvalidExecution,
+			fmt.Sprintf("execute concurrent operation: concurrency must be positive: %d", concurrency),
+		)
 	}
 	if concurrency > attempts {
-		return fmt.Errorf(
-			"execute concurrent operation: concurrency %d exceeds attempts %d",
-			concurrency,
-			attempts,
+		return failure.New(
+			failure.CodeInvalidExecution,
+			fmt.Sprintf("execute concurrent operation: concurrency %d exceeds attempts %d", concurrency, attempts),
 		)
 	}
 	return nil

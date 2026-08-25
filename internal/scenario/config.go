@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/eumarumar/concurtest/internal/engine"
+	"github.com/eumarumar/concurtest/internal/failure"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -34,7 +35,12 @@ type Definition struct {
 }
 
 // Decode reads and validates one YAML scenario document.
-func Decode(reader io.Reader) (Definition, error) {
+func Decode(reader io.Reader) (definition Definition, decodeErr error) {
+	defer func() {
+		if decodeErr != nil {
+			decodeErr = failure.Wrap(failure.CodeScenarioInvalid, "decode scenario configuration", decodeErr)
+		}
+	}()
 	if reader == nil {
 		return Definition{}, errors.New("read scenario: no input provided")
 	}

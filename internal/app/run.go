@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/eumarumar/concurtest/internal/engine"
+	"github.com/eumarumar/concurtest/internal/failure"
 	"github.com/eumarumar/concurtest/internal/reduction"
 	"github.com/eumarumar/concurtest/internal/report"
 	"github.com/eumarumar/concurtest/internal/scenario"
@@ -28,6 +29,7 @@ const (
 // It does not call os.Exit, allowing callers to release process resources and
 // tests to inspect all output.
 func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	wantsJSON := jsonFormatRequested(args)
 	if stdout == nil {
 		writeDiagnostic(stderr, "ConcurTest could not start: no standard output writer was provided.")
 		return exitError
@@ -36,7 +38,12 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		return exitError
 	}
 	if ctx == nil {
-		writeDiagnostic(stderr, "ConcurTest could not start: no execution context was provided.")
+		err := failure.New(failure.CodeInvalidExecution, "ConcurTest could not start: no execution context was provided.")
+		if wantsJSON {
+			writeEarlyJSONError(stdout, stderr, report.ErrorInput{Err: err})
+		} else {
+			writeDiagnostic(stderr, "%v", err)
+		}
 		return exitError
 	}
 
@@ -50,6 +57,11 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 
 	options, err := runOptionsFromArgs(args)
 	if err != nil {
+		if wantsJSON {
+			err = failure.Wrap(failure.CodeInvalidCommand, "command is invalid", err)
+			writeEarlyJSONError(stdout, stderr, report.ErrorInput{Err: err})
+			return exitError
+		}
 		writeDiagnostic(stderr, "Command error: %v", err)
 		if usageErr := writeUsage(stderr); usageErr != nil {
 			return exitError
@@ -59,21 +71,43 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 
 	definition, err := loadScenario(options.scenarioPath)
 	if err != nil {
+		if options.format == outputJSON {
+			writeEarlyJSONError(stdout, stderr, report.ErrorInput{ScenarioPath: options.scenarioPath, Err: err})
+			return exitError
+		}
 		writeDiagnostic(stderr, "Could not load scenario %q: %v", options.scenarioPath, err)
 		return exitError
 	}
 	if err := applyRunOptions(&definition, options); err != nil {
+		if options.format == outputJSON {
+			err = failure.Wrap(failure.CodeInvalidCommand, "command is invalid", err)
+			writeEarlyJSONError(stdout, stderr, report.ErrorInput{
+				ScenarioPath: options.scenarioPath, ScenarioName: definition.Name,
+				Target: definition.Target, Err: err,
+			})
+			return exitError
+		}
 		writeDiagnostic(stderr, "Command error: %v", err)
 		return exitError
 	}
 
-	if err := writeStart(stdout, definition); err != nil {
-		writeDiagnostic(stderr, "Could not write the run details: %v", err)
-		return exitError
+	if options.format == outputText {
+		if err := writeStart(stdout, definition); err != nil {
+			writeDiagnostic(stderr, "Could not write the run details: %v", err)
+			return exitError
+		}
 	}
 
 	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
+		err := failure.New(failure.CodeInternal, "ConcurTest could not create an HTTP client.")
+		if options.format == outputJSON {
+			writeEarlyJSONError(stdout, stderr, report.ErrorInput{
+				ScenarioPath: options.scenarioPath, ScenarioName: definition.Name,
+				Target: definition.Target, Err: err,
+			})
+			return exitError
+		}
 		writeDiagnostic(stderr, "ConcurTest could not create an HTTP client.")
 		return exitError
 	}
@@ -94,13 +128,24 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	} else {
 		result, runErr = engine.RunTrials(ctx, client, definition.Scenario, definition.Trials)
 	}
-	reportErr := report.WriteText(stdout, report.TextInput{
-		ScenarioPath: options.scenarioPath,
-		Scenario:     definition.Scenario,
-		Result:       result,
-		RunError:     runErr,
-		Reduction:    reductionResult,
-	})
+	reportInput := report.Input{
+		ScenarioPath:     options.scenarioPath,
+		ScenarioName:     definition.Name,
+		Target:           definition.Target,
+		RequestTimeout:   definition.RequestTimeout,
+		ConfiguredTrials: definition.Trials,
+		ReductionEnabled: definition.Reduce,
+		Scenario:         definition.Scenario,
+		Result:           result,
+		RunError:         runErr,
+		Reduction:        reductionResult,
+	}
+	var reportErr error
+	if options.format == outputJSON {
+		reportErr = report.WriteJSON(stdout, reportInput)
+	} else {
+		reportErr = report.WriteText(stdout, reportInput)
+	}
 	if reportErr != nil {
 		writeDiagnostic(stderr, "Could not write the run report: %v", reportErr)
 		return exitError
@@ -136,7 +181,16 @@ type runOptions struct {
 	concurrency    int
 	concurrencySet bool
 	noReduce       bool
+	format         outputFormat
+	formatSet      bool
 }
+
+type outputFormat string
+
+const (
+	outputText outputFormat = "text"
+	outputJSON outputFormat = "json"
+)
 
 func runOptionsFromArgs(args []string) (runOptions, error) {
 	if len(args) == 0 {
@@ -146,7 +200,7 @@ func runOptionsFromArgs(args []string) (runOptions, error) {
 		return runOptions{}, fmt.Errorf("unknown command %q", args[0])
 	}
 
-	var options runOptions
+	options := runOptions{format: outputText}
 	for index := 1; index < len(args); index++ {
 		argument := args[index]
 		switch {
@@ -155,6 +209,22 @@ func runOptionsFromArgs(args []string) (runOptions, error) {
 				return runOptions{}, errors.New("run accepts --no-reduce only once")
 			}
 			options.noReduce = true
+		case argument == "--format" || strings.HasPrefix(argument, "--format="):
+			value, next, err := formatOptionValue(args, index)
+			if err != nil {
+				return runOptions{}, err
+			}
+			if options.formatSet {
+				return runOptions{}, errors.New("run accepts --format only once")
+			}
+			switch outputFormat(value) {
+			case outputText, outputJSON:
+				options.format = outputFormat(value)
+			default:
+				return runOptions{}, fmt.Errorf("--format must be text or json, got %q", value)
+			}
+			options.formatSet = true
+			index = next
 		case argument == "--attempts" || strings.HasPrefix(argument, "--attempts="):
 			value, next, err := optionValue(args, index, "--attempts")
 			if err != nil {
@@ -195,6 +265,33 @@ func runOptionsFromArgs(args []string) (runOptions, error) {
 		return runOptions{}, errors.New("run needs a scenario file")
 	}
 	return options, nil
+}
+
+func formatOptionValue(args []string, index int) (string, int, error) {
+	argument := args[index]
+	if argument == "--format" {
+		if index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") {
+			return "", index, errors.New("--format needs text or json")
+		}
+		return args[index+1], index + 1, nil
+	}
+	value := strings.TrimPrefix(argument, "--format=")
+	if value == "" {
+		return "", index, errors.New("--format needs text or json")
+	}
+	return value, index, nil
+}
+
+func jsonFormatRequested(args []string) bool {
+	for index, argument := range args {
+		if argument == "--format=json" {
+			return true
+		}
+		if argument == "--format" && index+1 < len(args) && args[index+1] == "json" {
+			return true
+		}
+	}
+	return false
 }
 
 func optionValue(args []string, index int, name string) (string, int, error) {
@@ -249,16 +346,21 @@ func applyRunOptions(definition *scenario.Definition, options runOptions) error 
 func loadScenario(path string) (scenario.Definition, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return scenario.Definition{}, err
+		return scenario.Definition{}, failure.Wrap(failure.CodeScenarioFileFailed, "open scenario file", err)
 	}
 
 	definition, decodeErr := scenario.Decode(file)
 	closeErr := file.Close()
-	if decodeErr != nil || closeErr != nil {
-		return scenario.Definition{}, errors.Join(
-			decodeErr,
-			wrapError("close scenario file", closeErr),
+	if decodeErr != nil {
+		return scenario.Definition{}, failure.Join(
+			failure.CodeScenarioInvalid,
+			"load scenario",
+			failure.Wrap(failure.CodeScenarioInvalid, "decode scenario", decodeErr),
+			failure.Wrap(failure.CodeScenarioFileFailed, "close scenario file", closeErr),
 		)
+	}
+	if closeErr != nil {
+		return scenario.Definition{}, failure.Wrap(failure.CodeScenarioFileFailed, "close scenario file", closeErr)
 	}
 	return definition, nil
 }
@@ -286,7 +388,7 @@ func writeStart(writer io.Writer, definition scenario.Definition) error {
 func writeUsage(writer io.Writer) error {
 	_, err := io.WriteString(
 		writer,
-		"Usage:\n  concurtest run [--attempts N] [--concurrency N] [--no-reduce] <scenario.yaml>\n\nRuns one adversarial scenario against its configured target.\n",
+		"Usage:\n  concurtest run [--attempts N] [--concurrency N] [--no-reduce] [--format text|json] <scenario.yaml>\n\nRuns one adversarial scenario against its configured target. Text output is used unless --format json is selected.\n",
 	)
 	return err
 }
@@ -298,9 +400,8 @@ func writeDiagnostic(writer io.Writer, format string, arguments ...any) {
 	_, _ = fmt.Fprintf(writer, format+"\n", arguments...)
 }
 
-func wrapError(action string, err error) error {
-	if err == nil {
-		return nil
+func writeEarlyJSONError(writer io.Writer, diagnostics io.Writer, input report.ErrorInput) {
+	if err := report.WriteJSONError(writer, input); err != nil {
+		writeDiagnostic(diagnostics, "Could not write the JSON error report: %v", err)
 	}
-	return fmt.Errorf("%s: %w", action, err)
 }

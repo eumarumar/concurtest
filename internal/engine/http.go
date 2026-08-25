@@ -3,11 +3,11 @@ package engine
 import (
 	"bytes"
 	"context"
-	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/eumarumar/concurtest/internal/failure"
 )
 
 // MaxHTTPBodyBytes is the largest response body ExecuteHTTP retains in memory.
@@ -55,11 +55,11 @@ func ExecuteHTTP(ctx context.Context, client *http.Client, request HTTPRequest) 
 	}()
 
 	if ctx == nil {
-		execution.Err = errors.New("execute HTTP request: nil context")
+		execution.Err = failure.New(failure.CodeInvalidExecution, "execute HTTP request: nil context")
 		return execution
 	}
 	if client == nil {
-		execution.Err = errors.New("execute HTTP request: nil client")
+		execution.Err = failure.New(failure.CodeInvalidExecution, "execute HTTP request: nil client")
 		return execution
 	}
 
@@ -70,7 +70,7 @@ func ExecuteHTTP(ctx context.Context, client *http.Client, request HTTPRequest) 
 		bytes.NewReader(execution.Request.Body),
 	)
 	if err != nil {
-		execution.Err = fmt.Errorf("create HTTP request: %w", err)
+		execution.Err = failure.Wrap(failure.CodeRequestCreateFailed, "create HTTP request", err)
 		return execution
 	}
 	httpRequest.Header = execution.Request.Header.Clone()
@@ -80,7 +80,7 @@ func ExecuteHTTP(ctx context.Context, client *http.Client, request HTTPRequest) 
 		if httpResponse != nil {
 			execution.Response = responseMetadata(httpResponse)
 		}
-		execution.Err = fmt.Errorf("send HTTP request: %w", err)
+		execution.Err = failure.Wrap(failure.CodeRequestSendFailed, "send HTTP request", err)
 		return execution
 	}
 
@@ -96,9 +96,11 @@ func ExecuteHTTP(ctx context.Context, client *http.Client, request HTTPRequest) 
 	execution.Response = response
 
 	if readErr != nil || closeErr != nil {
-		execution.Err = errors.Join(
-			wrapError("read HTTP response body", readErr),
-			wrapError("close HTTP response body", closeErr),
+		execution.Err = failure.Join(
+			failure.CodeResponseFailed,
+			"read HTTP response",
+			failure.Wrap(failure.CodeResponseReadFailed, "read HTTP response body", readErr),
+			failure.Wrap(failure.CodeResponseCloseFailed, "close HTTP response body", closeErr),
 		)
 	}
 
@@ -119,11 +121,4 @@ func responseMetadata(response *http.Response) *HTTPResponse {
 		StatusCode: response.StatusCode,
 		Header:     response.Header.Clone(),
 	}
-}
-
-func wrapError(action string, err error) error {
-	if err == nil {
-		return nil
-	}
-	return fmt.Errorf("%s: %w", action, err)
 }

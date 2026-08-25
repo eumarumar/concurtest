@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/eumarumar/concurtest/internal/failure"
 )
 
 // MaxTrials is the largest trial sequence accepted by RunTrials.
@@ -59,7 +61,7 @@ func RunTrials(
 	count int,
 ) (result TrialsResult, trialsErr error) {
 	if count < 1 || count > MaxTrials {
-		return result, fmt.Errorf("validate trial count: must be between 1 and %d: %d", MaxTrials, count)
+		return result, failure.New(failure.CodeInvalidExecution, fmt.Sprintf("validate trial count: must be between 1 and %d: %d", MaxTrials, count))
 	}
 	result.Requested = count
 	result.Trials = make([]TrialResult, 0, count)
@@ -74,7 +76,7 @@ func RunTrials(
 
 	for number := 1; number <= count; number++ {
 		if err := ctx.Err(); err != nil {
-			return result, fmt.Errorf("run trial sequence: %w", err)
+			return result, failure.Wrap(failure.CodeTrialSequenceInterrupted, "run trial sequence", err)
 		}
 
 		run, runErr := Run(ctx, client, scenario)
@@ -86,7 +88,7 @@ func RunTrials(
 		})
 
 		if err := ctx.Err(); err != nil {
-			return result, fmt.Errorf("run trial sequence: %w", err)
+			return result, failure.Wrap(failure.CodeTrialSequenceInterrupted, "run trial sequence", err)
 		}
 	}
 

@@ -14,32 +14,42 @@ import (
 	"time"
 
 	"github.com/eumarumar/concurtest/internal/engine"
+	"github.com/eumarumar/concurtest/internal/failure"
 	"github.com/eumarumar/concurtest/internal/reduction"
 )
 
 const maxResponseExcerptBytes = 512
 
-// TextInput contains the configured work and recorded evidence for one report.
-type TextInput struct {
-	ScenarioPath string
-	Scenario     engine.Scenario
-	Result       engine.TrialsResult
-	RunError     error
-	Reduction    *reduction.Result
+// Input contains the configured work and recorded evidence for a completed or
+// partially completed run report.
+type Input struct {
+	ScenarioPath     string
+	ScenarioName     string
+	Target           string
+	RequestTimeout   time.Duration
+	ConfiguredTrials int
+	ReductionEnabled bool
+	Scenario         engine.Scenario
+	Result           engine.TrialsResult
+	RunError         error
+	Reduction        *reduction.Result
 }
+
+// TextInput is retained as an alias for callers constructing text reports.
+type TextInput = Input
 
 // WriteText writes a deterministic, human-readable report. It preserves the
 // stable attempt ordering already established by the engine.
-func WriteText(writer io.Writer, input TextInput) error {
+func WriteText(writer io.Writer, input Input) error {
 	if writer == nil {
-		return errors.New("write text report: nil writer")
+		return failure.New(failure.CodeReportInvalid, "write text report: nil writer")
 	}
 	if err := validateTextInput(input); err != nil {
-		return err
+		return failure.Wrap(failure.CodeReportInvalid, "", err)
 	}
 	resultLabel, err := resultLabel(input)
 	if err != nil {
-		return err
+		return failure.Wrap(failure.CodeReportInvalid, "", err)
 	}
 
 	buffer := bufio.NewWriter(writer)
@@ -81,12 +91,12 @@ func WriteText(writer io.Writer, input TextInput) error {
 	writeReproduction(buffer, input)
 
 	if err := buffer.Flush(); err != nil {
-		return fmt.Errorf("write text report: %w", err)
+		return failure.Wrap(failure.CodeReportWriteFailed, "write text report", err)
 	}
 	return nil
 }
 
-func resultLabel(input TextInput) (string, error) {
+func resultLabel(input Input) (string, error) {
 	if input.RunError != nil {
 		return "ERROR", nil
 	}
@@ -104,7 +114,7 @@ func resultLabel(input TextInput) (string, error) {
 	}
 }
 
-func validateTextInput(input TextInput) error {
+func validateTextInput(input Input) error {
 	if input.Result.Requested < 1 || input.Result.Requested > engine.MaxTrials {
 		return fmt.Errorf("write text report: invalid requested trial count %d", input.Result.Requested)
 	}
@@ -345,7 +355,7 @@ func reductionSummary(result engine.TrialsResult) reduction.TrialSummary {
 	}
 }
 
-func writeReproduction(writer io.Writer, input TextInput) {
+func writeReproduction(writer io.Writer, input Input) {
 	if input.Reduction != nil && input.Reduction.SelectedTrials != nil {
 		fmt.Fprintf(
 			writer,
@@ -572,10 +582,16 @@ func failedAttemptCount(history engine.History) int {
 
 func requestTarget(rawURL string) string {
 	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.Path == "" {
+	if err != nil {
 		return rawURL
 	}
 	target := parsed.EscapedPath()
+	if target == "" && (parsed.IsAbs() || parsed.Host != "") {
+		target = "/"
+	}
+	if target == "" {
+		return rawURL
+	}
 	if parsed.ForceQuery || parsed.RawQuery != "" {
 		target += "?" + parsed.RawQuery
 	}

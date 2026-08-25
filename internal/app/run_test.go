@@ -3,6 +3,7 @@ package app_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -36,7 +37,7 @@ func TestRunShowsHelp(t *testing.T) {
 			if code := app.Run(context.Background(), args, &stdout, &stderr); code != 0 {
 				t.Errorf("Run() exit code = %d, want 0", code)
 			}
-			if !strings.Contains(stdout.String(), "concurtest run [--attempts N] [--concurrency N] [--no-reduce] <scenario.yaml>") {
+			if !strings.Contains(stdout.String(), "concurtest run [--attempts N] [--concurrency N] [--no-reduce] [--format text|json] <scenario.yaml>") {
 				t.Errorf("stdout does not contain usage:\n%s", stdout.String())
 			}
 			if stderr.Len() != 0 {
@@ -62,6 +63,8 @@ func TestRunRejectsInvalidArguments(t *testing.T) {
 		{name: "missing option value", args: []string{"run", "--attempts"}, want: "--attempts needs a positive integer"},
 		{name: "invalid option value", args: []string{"run", "--concurrency=zero", "scenario.yaml"}, want: "--concurrency must be a positive integer"},
 		{name: "duplicate option", args: []string{"run", "--attempts=2", "--attempts=3", "scenario.yaml"}, want: "run accepts --attempts only once"},
+		{name: "invalid format", args: []string{"run", "--format=xml", "scenario.yaml"}, want: `--format must be text or json, got "xml"`},
+		{name: "missing format", args: []string{"run", "--format"}, want: "--format needs text or json"},
 	}
 
 	for _, test := range tests {
@@ -78,6 +81,108 @@ func TestRunRejectsInvalidArguments(t *testing.T) {
 				t.Errorf("stderr does not explain the command error:\n%s", stderr.String())
 			}
 		})
+	}
+}
+
+func TestRunWritesJSONForEarlyFailures(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		args     []string
+		wantCode string
+		wantPath string
+	}{
+		{
+			name:     "command failure",
+			args:     []string{"run", "--format", "json", "--unknown"},
+			wantCode: "invalid_command",
+		},
+		{
+			name:     "scenario file failure",
+			args:     []string{"run", filepath.Join(t.TempDir(), "missing.yaml"), "--format=json"},
+			wantCode: "scenario_file_failed",
+			wantPath: "missing.yaml",
+		},
+		{
+			name:     "duplicate format after JSON selection",
+			args:     []string{"run", "--format=json", "--format=text", "scenario.yaml"},
+			wantCode: "invalid_command",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := app.Run(context.Background(), test.args, &stdout, &stderr); code != 2 {
+				t.Fatalf("Run() exit code = %d, want 2", code)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+			var document struct {
+				SchemaVersion string `json:"schema_version"`
+				ReportType    string `json:"report_type"`
+				Error         struct {
+					Code string `json:"code"`
+				} `json:"error"`
+				Context struct {
+					ScenarioPath *string `json:"scenario_path"`
+				} `json:"context"`
+			}
+			if err := json.Unmarshal(stdout.Bytes(), &document); err != nil {
+				t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+			}
+			if document.SchemaVersion != "1.0.0" || document.ReportType != "error" || document.Error.Code != test.wantCode {
+				t.Fatalf("error report = %#v\n%s", document, stdout.String())
+			}
+			if test.wantPath != "" && (document.Context.ScenarioPath == nil || !strings.Contains(*document.Context.ScenarioPath, test.wantPath)) {
+				t.Fatalf("scenario path = %#v", document.Context.ScenarioPath)
+			}
+		})
+	}
+}
+
+func TestRunWritesJSONRunReportAndPreservesExitCode(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/purchase":
+			writer.Header().Set("X-Secret", "response-secret")
+			writer.WriteHeader(http.StatusCreated)
+			_, _ = writer.Write([]byte(`{"accepted":true}`))
+		case "/state":
+			_, _ = writer.Write([]byte(`{"stock":-1}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	path := writeScenarioFile(t, scenarioYAML(server.URL, "1s", 1, 1, false))
+
+	var stdout, stderr bytes.Buffer
+	if code := app.Run(context.Background(), []string{"run", path, "--format=json"}, &stdout, &stderr); code != 1 {
+		t.Fatalf("Run() exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+	if strings.Contains(stdout.String(), "Scenario:") || strings.Contains(stdout.String(), "Warning:") || strings.Contains(stdout.String(), "request-secret") || strings.Contains(stdout.String(), "response-secret") {
+		t.Fatalf("JSON output contains text preamble or secrets:\n%s", stdout.String())
+	}
+	var document struct {
+		ReportType string `json:"report_type"`
+		Status     string `json:"status"`
+		Summary    struct {
+			Violated int `json:"violated"`
+		} `json:"summary"`
+		Trials []json.RawMessage `json:"trials"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &document); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if document.ReportType != "run" || document.Status != "violated" || document.Summary.Violated != 1 || len(document.Trials) != 1 {
+		t.Fatalf("run report = %#v", document)
 	}
 }
 
@@ -217,7 +322,7 @@ func TestRunUsesRequestTimeoutAndReturnsInconclusive(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	path := writeScenarioFile(t, scenarioYAML(server.URL, "20ms", 1, 1, false))
+	path := writeScenarioFile(t, scenarioYAML(server.URL, "200ms", 1, 1, false))
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	var stdout, stderr bytes.Buffer

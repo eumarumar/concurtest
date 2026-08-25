@@ -70,6 +70,38 @@ command uses execution overrides and disables another reduction pass:
 concurtest run --attempts 2 --concurrency 2 --no-reduce "examples/vulnerable-inventory/scenario.yaml"
 ```
 
+## Use JSON reports in CI
+
+Text remains the default. Select the versioned JSON report explicitly when a
+CI job or another tool needs structured results:
+
+```bash
+go run ./cmd/concurtest run --format json examples/vulnerable-inventory/scenario.yaml
+```
+
+The JSON document includes scenario metadata, aggregate counts, every ordered
+trial with complete evidence, invariant results, retained reduction evidence,
+structured errors, nanosecond timing, and an argument array for reproduction.
+Passing trials are complete in JSON even though the text report summarizes
+them.
+
+The contract is defined by the checked-in
+[report schema](schemas/report-v1.schema.json). Reports currently use schema
+version `1.0.0`. Objects are closed; adding, removing, or changing an emitted
+property requires a new major schema version.
+
+Response excerpts retain at most 512 bytes. Valid UTF-8 is emitted as text and
+other bytes are base64 encoded. Reports never include request bodies or HTTP
+headers. Command and scenario-loading failures also produce a JSON error
+document when `--format json` is selected.
+
+Exit codes do not depend on report format:
+
+- `0` means every trial passed.
+- `1` means at least one trial demonstrated an invariant violation.
+- `2` means no violation was demonstrated and the run was inconclusive,
+  errored, or interrupted.
+
 ## Detect a failure hidden by final state
 
 The service also exposes an availability view that reports negative stock as

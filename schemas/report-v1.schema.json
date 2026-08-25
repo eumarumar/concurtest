@@ -1,0 +1,454 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://concurtest.dev/schemas/report-v1.schema.json",
+  "title": "ConcurTest JSON report 1.0.0",
+  "oneOf": [
+    { "$ref": "#/$defs/run_report" },
+    { "$ref": "#/$defs/error_report" }
+  ],
+  "$defs": {
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "causes"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "message": { "type": "string" },
+        "causes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/error" }
+        }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["started_at", "completed_at", "duration_ns"],
+      "properties": {
+        "started_at": { "type": "string", "format": "date-time" },
+        "completed_at": { "type": "string", "format": "date-time" },
+        "duration_ns": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "nullable_timing": {
+      "oneOf": [
+        { "$ref": "#/$defs/timing" },
+        { "type": "null" }
+      ]
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "target"],
+      "properties": {
+        "method": { "type": "string", "minLength": 1 },
+        "target": { "type": "string", "minLength": 1 }
+      }
+    },
+    "json_integer_minimum_definition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "name", "field", "minimum"],
+      "properties": {
+        "type": { "const": "json_integer_minimum" },
+        "name": { "type": "string", "minLength": 1 },
+        "field": { "type": "string", "minLength": 1 },
+        "minimum": { "type": "integer" }
+      }
+    },
+    "maximum_successful_attempts_definition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "name", "maximum", "successful_status_codes"],
+      "properties": {
+        "type": { "const": "maximum_successful_attempts" },
+        "name": { "type": "string", "minLength": 1 },
+        "maximum": { "type": "integer", "minimum": 0 },
+        "successful_status_codes": {
+          "oneOf": [
+            {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "type": "integer", "minimum": 100, "maximum": 599 }
+            },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "invariant_definition": {
+      "oneOf": [
+        { "$ref": "#/$defs/json_integer_minimum_definition" },
+        { "$ref": "#/$defs/maximum_successful_attempts_definition" }
+      ]
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "name", "target", "request_timeout_ns", "execution", "setup", "operation", "observation", "invariant"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "name": { "type": "string" },
+        "target": { "type": "string" },
+        "request_timeout_ns": { "type": "integer", "minimum": 0 },
+        "execution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["attempts", "concurrency", "trials", "reduction_enabled"],
+          "properties": {
+            "attempts": { "type": "integer", "minimum": 1 },
+            "concurrency": { "type": "integer", "minimum": 1 },
+            "trials": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "reduction_enabled": { "type": "boolean" }
+          }
+        },
+        "setup": {
+          "oneOf": [
+            { "$ref": "#/$defs/request" },
+            { "type": "null" }
+          ]
+        },
+        "operation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "request"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "request": { "$ref": "#/$defs/request" }
+          }
+        },
+        "observation": {
+          "oneOf": [
+            { "$ref": "#/$defs/request" },
+            { "type": "null" }
+          ]
+        },
+        "invariant": { "$ref": "#/$defs/invariant_definition" }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requested", "completed", "passed", "violated", "inconclusive", "errored", "first_violation_trial", "timing"],
+      "properties": {
+        "requested": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "completed": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "passed": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "violated": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "inconclusive": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "errored": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "first_violation_trial": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 100
+        },
+        "timing": { "$ref": "#/$defs/nullable_timing" }
+      }
+    },
+    "response_excerpt": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["encoding", "data", "retained_bytes", "truncated"],
+          "properties": {
+            "encoding": { "const": "utf-8" },
+            "data": { "type": "string" },
+            "retained_bytes": { "type": "integer", "minimum": 0, "maximum": 512 },
+            "truncated": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["encoding", "data", "retained_bytes", "truncated"],
+          "properties": {
+            "encoding": { "const": "base64" },
+            "data": { "type": "string", "contentEncoding": "base64" },
+            "retained_bytes": { "type": "integer", "minimum": 0, "maximum": 512 },
+            "truncated": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status_code", "body_excerpt"],
+      "properties": {
+        "status_code": { "type": "integer", "minimum": 0, "maximum": 999 },
+        "body_excerpt": {
+          "oneOf": [
+            { "$ref": "#/$defs/response_excerpt" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request", "response", "timing", "error"],
+      "properties": {
+        "request": { "$ref": "#/$defs/request" },
+        "response": {
+          "oneOf": [
+            { "$ref": "#/$defs/response" },
+            { "type": "null" }
+          ]
+        },
+        "timing": { "$ref": "#/$defs/nullable_timing" },
+        "error": {
+          "oneOf": [
+            { "$ref": "#/$defs/error" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "operation_name", "start_offset_ns", "execution"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 1 },
+        "operation_name": { "type": "string" },
+        "start_offset_ns": { "type": ["integer", "null"], "minimum": 0 },
+        "execution": {
+          "oneOf": [
+            { "$ref": "#/$defs/execution" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "json_integer_minimum_evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "observed", "violated"],
+      "properties": {
+        "type": { "const": "json_integer_minimum" },
+        "observed": { "type": "integer" },
+        "violated": { "type": "boolean" }
+      }
+    },
+    "maximum_successful_attempts_evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "successful_attempt_ids", "over_limit_attempt_ids", "violated"],
+      "properties": {
+        "type": { "const": "maximum_successful_attempts" },
+        "successful_attempt_ids": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1 }
+        },
+        "over_limit_attempt_ids": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1 }
+        },
+        "violated": { "type": "boolean" }
+      }
+    },
+    "invariant_evaluation": {
+      "oneOf": [
+        { "$ref": "#/$defs/json_integer_minimum_evaluation" },
+        { "$ref": "#/$defs/maximum_successful_attempts_evaluation" },
+        { "type": "null" }
+      ]
+    },
+    "trial": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["number", "status", "error", "evidence"],
+      "properties": {
+        "number": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "status": { "enum": ["passed", "violated", "inconclusive", "errored"] },
+        "error": {
+          "oneOf": [
+            { "$ref": "#/$defs/error" },
+            { "type": "null" }
+          ]
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["outcome", "timing", "setup", "history", "observation", "invariant_evaluation"],
+          "properties": {
+            "outcome": { "type": ["string", "null"], "enum": ["passed", "violated", "inconclusive", null] },
+            "timing": { "$ref": "#/$defs/nullable_timing" },
+            "setup": {
+              "oneOf": [
+                { "$ref": "#/$defs/execution" },
+                { "type": "null" }
+              ]
+            },
+            "history": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["timing", "attempts"],
+              "properties": {
+                "timing": { "$ref": "#/$defs/nullable_timing" },
+                "attempts": {
+                  "type": "array",
+                  "items": { "$ref": "#/$defs/attempt" }
+                }
+              }
+            },
+            "observation": {
+              "oneOf": [
+                { "$ref": "#/$defs/execution" },
+                { "type": "null" }
+              ]
+            },
+            "invariant_evaluation": { "$ref": "#/$defs/invariant_evaluation" }
+          }
+        }
+      }
+    },
+    "baseline_reduction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempts", "concurrency", "summary"],
+      "properties": {
+        "attempts": { "type": "integer", "minimum": 1 },
+        "concurrency": { "type": "integer", "minimum": 1 },
+        "summary": { "$ref": "#/$defs/summary" }
+      }
+    },
+    "candidate_reduction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["number", "attempts", "concurrency", "accepted", "summary", "error", "trials"],
+      "properties": {
+        "number": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "attempts": { "type": "integer", "minimum": 1 },
+        "concurrency": { "type": "integer", "minimum": 1 },
+        "accepted": { "type": "boolean" },
+        "summary": { "$ref": "#/$defs/candidate_summary" },
+        "error": {
+          "oneOf": [
+            { "$ref": "#/$defs/error" },
+            { "type": "null" }
+          ]
+        },
+        "trials": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": { "$ref": "#/$defs/trial" }
+            },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "candidate_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requested", "completed", "passed", "violated", "inconclusive", "errored", "timing"],
+      "properties": {
+        "requested": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "completed": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "passed": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "violated": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "inconclusive": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "errored": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "timing": { "$ref": "#/$defs/nullable_timing" }
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "candidate_number", "attempts", "concurrency"],
+      "properties": {
+        "source": { "enum": ["baseline", "candidate"] },
+        "candidate_number": { "type": ["integer", "null"], "minimum": 1, "maximum": 100 },
+        "attempts": { "type": "integer", "minimum": 1 },
+        "concurrency": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "reduction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "timing", "max_candidates", "baseline", "candidates", "selection"],
+      "properties": {
+        "status": { "enum": ["skipped", "reduced", "unchanged", "limited", "interrupted", "errored"] },
+        "timing": { "$ref": "#/$defs/nullable_timing" },
+        "max_candidates": { "type": "integer", "minimum": 1 },
+        "baseline": { "$ref": "#/$defs/baseline_reduction" },
+        "candidates": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/candidate_reduction" }
+        },
+        "selection": {
+          "oneOf": [
+            { "$ref": "#/$defs/selection" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "run_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "report_type", "status", "scenario", "summary", "trials", "reduction", "error", "reproduction"],
+      "properties": {
+        "schema_version": { "const": "1.0.0" },
+        "report_type": { "const": "run" },
+        "status": { "enum": ["passed", "violated", "inconclusive", "errored", "interrupted"] },
+        "scenario": { "$ref": "#/$defs/scenario" },
+        "summary": { "$ref": "#/$defs/summary" },
+        "trials": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/trial" }
+        },
+        "reduction": {
+          "oneOf": [
+            { "$ref": "#/$defs/reduction" },
+            { "type": "null" }
+          ]
+        },
+        "error": {
+          "oneOf": [
+            { "$ref": "#/$defs/error" },
+            { "type": "null" }
+          ]
+        },
+        "reproduction": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["arguments"],
+          "properties": {
+            "arguments": {
+              "type": "array",
+              "minItems": 4,
+              "items": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "error_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "report_type", "status", "context", "error"],
+      "properties": {
+        "schema_version": { "const": "1.0.0" },
+        "report_type": { "const": "error" },
+        "status": { "const": "errored" },
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scenario_path", "scenario_name", "target"],
+          "properties": {
+            "scenario_path": { "type": ["string", "null"] },
+            "scenario_name": { "type": ["string", "null"] },
+            "target": { "type": ["string", "null"] }
+          }
+        },
+        "error": { "$ref": "#/$defs/error" }
+      }
+    }
+  }
+}

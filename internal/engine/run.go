@@ -2,10 +2,11 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/eumarumar/concurtest/internal/failure"
 )
 
 // RunOutcome classifies a completed scenario evaluation.
@@ -86,7 +87,7 @@ func Run(
 	)
 	result.History = history
 	if err != nil {
-		return result, fmt.Errorf("execute scenario operations: %w", err)
+		return result, failure.Wrap(failure.CodeOperationBatchFailed, "execute scenario operations", err)
 	}
 
 	if scenario.Invariant.MaximumSuccessfulAttempts != nil {
@@ -95,7 +96,7 @@ func Run(
 			history,
 		)
 		if err != nil {
-			return result, fmt.Errorf("evaluate scenario invariant: %w", err)
+			return result, failure.Wrap(failure.CodeInvariantEvaluationFailed, "evaluate scenario invariant", err)
 		}
 		result.Evaluation = &InvariantEvaluation{
 			MaximumSuccessfulAttempts: &evaluation,
@@ -121,7 +122,7 @@ func Run(
 			return result, err
 		}
 		if observation.Response.BodyTruncated {
-			return result, errors.New("observe scenario state: response body was truncated")
+			return result, failure.New(failure.CodeResponseTruncated, "observe scenario state: response body was truncated")
 		}
 
 		evaluation, err := EvaluateJSONIntegerMinimum(
@@ -129,7 +130,7 @@ func Run(
 			observation.Response.Body,
 		)
 		if err != nil {
-			return result, fmt.Errorf("evaluate scenario invariant: %w", err)
+			return result, failure.Wrap(failure.CodeInvariantEvaluationFailed, "evaluate scenario invariant", err)
 		}
 		result.Evaluation = &InvariantEvaluation{
 			JSONIntegerMinimum: &evaluation,
@@ -157,30 +158,30 @@ func validateRunInput(ctx context.Context, client *http.Client, scenario Scenari
 		scenario.Attempts,
 		scenario.Concurrency,
 	); err != nil {
-		return fmt.Errorf("validate scenario execution: %w", err)
+		return failure.Wrap(failure.CodeInvalidExecution, "validate scenario execution", err)
 	}
 	if err := validateInvariant(scenario.Invariant); err != nil {
-		return fmt.Errorf("validate scenario invariant: %w", err)
+		return failure.Wrap(failure.CodeInvariantInvalid, "validate scenario invariant", err)
 	}
 	if scenario.Invariant.JSONIntegerMinimum != nil && scenario.Observation == nil {
-		return errors.New("validate scenario invariant: JSON integer minimum requires an observation")
+		return failure.New(failure.CodeInvariantInvalid, "validate scenario invariant: JSON integer minimum requires an observation")
 	}
 	return nil
 }
 
 func requireSuccessfulStage(stage string, execution HTTPExecution) error {
 	if execution.Err != nil {
-		return fmt.Errorf("%s scenario request: %w", stage, execution.Err)
+		code := failure.CodeSetupFailed
+		if stage == "observation" {
+			code = failure.CodeObservationFailed
+		}
+		return failure.Wrap(code, stage+" scenario request", execution.Err)
 	}
 	if execution.Response == nil {
-		return fmt.Errorf("%s scenario request: missing HTTP response", stage)
+		return failure.New(failure.CodeMissingHTTPResponse, stage+" scenario request: missing HTTP response")
 	}
 	if execution.Response.StatusCode < http.StatusOK || execution.Response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf(
-			"%s scenario request: unexpected HTTP status %d",
-			stage,
-			execution.Response.StatusCode,
-		)
+		return failure.New(failure.CodeUnexpectedHTTPStatus, fmt.Sprintf("%s scenario request: unexpected HTTP status %d", stage, execution.Response.StatusCode))
 	}
 	return nil
 }

@@ -4,12 +4,12 @@ package reduction
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/eumarumar/concurtest/internal/engine"
+	"github.com/eumarumar/concurtest/internal/failure"
 )
 
 // MaxCandidates is the largest number of smaller execution configurations a
@@ -113,7 +113,7 @@ func reduce(
 	baseline, err := engine.RunTrials(ctx, client, scenario, trials)
 	result.Baseline = baseline
 	if err != nil {
-		return result, fmt.Errorf("run reduction baseline: %w", err)
+		return result, failure.Wrap(failure.CodeReductionBaselineFailed, "run reduction baseline", err)
 	}
 	if !qualifies(summarize(baseline)) {
 		result.Status = StatusSkipped
@@ -136,10 +136,9 @@ func reduce(
 		if candidateErr != nil {
 			candidateResult.Trials = &trialsResult
 			result.Candidates = append(result.Candidates, candidateResult)
-			return result, fmt.Errorf(
-				"evaluate reduction candidate with %d attempts and concurrency %d: %w",
-				candidate.Attempts,
-				candidate.Concurrency,
+			return result, failure.Wrap(
+				failure.CodeReductionCandidateFailed,
+				fmt.Sprintf("evaluate reduction candidate with %d attempts and concurrency %d", candidate.Attempts, candidate.Concurrency),
 				candidateErr,
 			)
 		}
@@ -171,27 +170,27 @@ func reduce(
 
 func validateInput(scenario engine.Scenario, trials int) error {
 	if scenario.Setup == nil {
-		return errors.New("validate reduction: setup is required to reset state before every trial")
+		return failure.New(failure.CodeReductionInvalid, "validate reduction: setup is required to reset state before every trial")
 	}
 	if trials < 3 || trials > engine.MaxTrials {
-		return fmt.Errorf(
+		return failure.New(failure.CodeReductionInvalid, fmt.Sprintf(
 			"validate reduction: trials must be between 3 and %d: %d",
 			engine.MaxTrials,
 			trials,
-		)
+		))
 	}
 	if scenario.Attempts < 2 {
-		return fmt.Errorf("validate reduction: attempts must be at least 2: %d", scenario.Attempts)
+		return failure.New(failure.CodeReductionInvalid, fmt.Sprintf("validate reduction: attempts must be at least 2: %d", scenario.Attempts))
 	}
 	if scenario.Concurrency < 2 {
-		return fmt.Errorf("validate reduction: concurrency must be at least 2: %d", scenario.Concurrency)
+		return failure.New(failure.CodeReductionInvalid, fmt.Sprintf("validate reduction: concurrency must be at least 2: %d", scenario.Concurrency))
 	}
 	if scenario.Concurrency > scenario.Attempts {
-		return fmt.Errorf(
+		return failure.New(failure.CodeReductionInvalid, fmt.Sprintf(
 			"validate reduction: concurrency %d exceeds attempts %d",
 			scenario.Concurrency,
 			scenario.Attempts,
-		)
+		))
 	}
 	return nil
 }
