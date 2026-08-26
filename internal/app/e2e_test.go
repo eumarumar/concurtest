@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -42,34 +41,35 @@ func TestVulnerableInventoryEndToEnd(t *testing.T) {
 
 	report := stdout.String()
 	assertOutputContains(t, report,
-		`Scenario: "inventory oversell"`,
-		"Target: "+server.URL,
-		"Result: VIOLATED",
-		"Trials: 10",
-		"Completed: 10",
-		"Violations: 10 of 10 completed trials",
-		"First violation: trial 1",
-		"Reduction: REDUCED",
-		"Candidates evaluated: 1",
-		"Smallest observed failure:",
-		"Attempts: 2",
-		"Concurrency: 2",
-		"Violations: 10 of 10 trials",
+		"ConcurTest · inventory oversell",
+		"Target · "+server.URL,
+		"VIOLATED",
+		"Requested       10",
+		"Completed       10",
+		"10 of 10 completed trials demonstrated the violation",
+		"First violation Trial 1",
+		"Status          REDUCED",
+		"Candidates      1 evaluated",
+		"Smallest observed failure",
+		"Attempts      2",
+		"Concurrency   2",
+		"Violations    10 of 10 trials",
 		"not proof that no smaller failure exists",
-		`Expected: "stock" >= 0`,
-		`Observed: "stock" = -1`,
-		`#1 "purchase"`,
-		`#2 "purchase"`,
-		"Reproduce: concurtest run --attempts 2 --concurrency 2 --no-reduce "+fmt.Sprintf("%q", scenarioPath),
+		"Expected        stock >= 0",
+		"Observed        stock = -1",
+		"Attempt #1",
+		"Attempt #2",
+		"Trials 2–10 had the same violation evidence as Trial 1.",
+		"concurtest run --attempts 2 --concurrency 2 --no-reduce "+scenarioPath,
 	)
-	if count := strings.Count(report, "Status: HTTP 201 Created"); count != 20 {
-		t.Errorf("successful purchase statuses = %d, want 20\n%s", count, report)
+	if count := strings.Count(report, "HTTP 201 Created"); count < 4 || count >= 60 {
+		t.Errorf("successful purchase statuses = %d, want compact representative evidence\n%s", count, report)
 	}
-	if count := strings.Count(report, `Response: "{\"accepted\":true}\n"`); count != 20 {
-		t.Errorf("successful purchase responses = %d, want 20\n%s", count, report)
+	if count := strings.Count(report, `Response        "{\"accepted\":true}\n"`); count < 4 || count >= 60 {
+		t.Errorf("successful purchase responses = %d, want compact representative evidence\n%s", count, report)
 	}
-	if count := strings.Count(report, "evidence (VIOLATED):"); count != 10 {
-		t.Errorf("violation evidence sections = %d, want 10\n%s", count, report)
+	if count := strings.Count(report, "Violation · Trial"); count < 1 || count >= 10 {
+		t.Errorf("baseline representative sections = %d, want compact distinct evidence\n%s", count, report)
 	}
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/state", nil)
@@ -121,35 +121,64 @@ func TestVulnerableInventoryHistoryEndToEnd(t *testing.T) {
 
 	report := stdout.String()
 	assertOutputContains(t, report,
-		`Scenario: "inventory accepted purchases"`,
-		"Target: "+server.URL,
-		"Result: VIOLATED",
-		"Trials: 10",
-		"Completed: 10",
-		"Violations: 10 of 10 completed trials",
-		"First violation: trial 1",
-		"Reduction: REDUCED",
-		"Candidates evaluated: 1",
-		"Smallest observed failure:",
-		"Attempts: 2",
-		"Concurrency: 2",
-		"Violations: 10 of 10 trials",
-		"Expected: at most 1 successful attempt",
-		"Successful statuses: HTTP 201 Created",
-		"Observed: 2 successful attempts",
-		"Successful attempts: #1, #2",
-		"Beyond maximum: #2",
-		`Response: "{\"stock\":0}\n"`,
-		"Reproduce: concurtest run --attempts 2 --concurrency 2 --no-reduce "+fmt.Sprintf("%q", scenarioPath),
+		"ConcurTest · inventory accepted purchases",
+		"Target · "+server.URL,
+		"VIOLATED",
+		"Requested       10",
+		"Completed       10",
+		"10 of 10 completed trials demonstrated the violation",
+		"First violation Trial 1",
+		"Status          REDUCED",
+		"Candidates      1 evaluated",
+		"Smallest observed failure",
+		"Attempts      2",
+		"Concurrency   2",
+		"Violations    10 of 10 trials",
+		"Expected        At most 1 successful attempt",
+		"Success statuses HTTP 201 Created",
+		"Observed        2 successful attempts",
+		"Successful       #1, #2",
+		"Beyond maximum   #2",
+		`Response        "{\"stock\":0}\n"`,
+		"concurtest run --attempts 2 --concurrency 2 --no-reduce "+scenarioPath,
 	)
-	if count := strings.Count(report, "Beyond maximum: #2"); count != 10 {
-		t.Errorf("over-limit evidence sections = %d, want 10\n%s", count, report)
+	if count := strings.Count(report, "Beyond maximum   #2"); count < 1 || count >= 11 {
+		t.Errorf("over-limit evidence fields = %d, want compact representative evidence\n%s", count, report)
 	}
-	if count := strings.Count(report, "Status: HTTP 201 Created"); count != 20 {
-		t.Errorf("successful purchase statuses = %d, want 20\n%s", count, report)
+	if count := strings.Count(report, "HTTP 201 Created"); count < 4 {
+		t.Errorf("successful purchase statuses = %d, want representative evidence\n%s", count, report)
 	}
-	if count := strings.Count(report, "evidence (VIOLATED):"); count != 10 {
-		t.Errorf("violation evidence sections = %d, want 10\n%s", count, report)
+	if strings.Contains(report, "Trial 10 · VIOLATED") {
+		t.Fatalf("default report expanded every equivalent trial:\n%s", report)
+	}
+}
+
+func TestVulnerableInventoryVerboseEndToEnd(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(inventoryapp.NewHandler())
+	t.Cleanup(server.Close)
+	scenarioPath := scenarioForTarget(t, "scenario.yaml", server.URL)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var stdout, stderr bytes.Buffer
+	if exitCode := app.Run(ctx, []string{"run", "--verbose", scenarioPath}, &stdout, &stderr); exitCode != 1 {
+		t.Fatalf("Run() exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", exitCode, stdout.String(), stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	report := stdout.String()
+	if count := strings.Count(report, "Violation · Trial"); count != 10 {
+		t.Fatalf("verbose baseline evidence sections = %d, want 10\n%s", count, report)
+	}
+	if count := strings.Count(report, "· VIOLATED"); count != 10 {
+		t.Fatalf("verbose selected evidence sections = %d, want 10\n%s", count, report)
+	}
+	assertOutputContains(t, report, "Candidate results", "Selected candidate evidence")
+	if strings.Contains(report, "same violation evidence") || strings.Contains(report, "Use --verbose") {
+		t.Fatalf("verbose report included compact evidence summaries:\n%s", report)
 	}
 }
 

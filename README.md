@@ -46,17 +46,26 @@ reproduces, ConcurTest tests smaller settings and selects two attempts at
 concurrency two:
 
 ```text
-Result: VIOLATED
-Trials: 10
-Completed: 10
-Violations: 10 of 10 completed trials
-First violation: trial 1
-Reduction: REDUCED
-Candidates evaluated: 1
-Smallest observed failure:
-  Attempts: 2
-  Concurrency: 2
-  Violations: 10 of 10 trials
+ConcurTest · inventory oversell
+
+VIOLATED
+10 of 10 completed trials demonstrated the violation.
+
+Execution
+  Attempts        4
+  Concurrency     4
+
+Invariant
+  final stock must be non-negative
+  Expected        stock >= 0
+  Observed        stock = -1
+
+Reduction
+  Status          REDUCED
+  Smallest observed failure
+    Attempts      2
+    Concurrency   2
+    Violations    10 of 10 trials
 ```
 
 The command exits with code `1`. That non-zero result is expected in this
@@ -67,8 +76,21 @@ It does not claim that the result is mathematically minimal. Its reproduction
 command uses execution overrides and disables another reduction pass:
 
 ```text
-concurtest run --attempts 2 --concurrency 2 --no-reduce "examples/vulnerable-inventory/scenario.yaml"
+concurtest run --attempts 2 --concurrency 2 --no-reduce examples/vulnerable-inventory/scenario.yaml
 ```
+
+The default text report expands the first representative of every distinct
+violation and always shows errored or inconclusive trials. Equivalent failures
+are summarized by trial number. Use `--verbose` to expand every retained trial,
+including passing trials and retained reduction evidence:
+
+```bash
+go run ./cmd/concurtest run --verbose examples/vulnerable-inventory/scenario.yaml
+```
+
+Terminal color is selected automatically. Redirected or piped output stays
+plain by default, and a non-empty `NO_COLOR` disables automatic color. Use
+`--color always` or `--color never` to choose explicitly.
 
 ## Use JSON reports in CI
 
@@ -84,6 +106,10 @@ trial with complete evidence, invariant results, retained reduction evidence,
 structured errors, nanosecond timing, and an argument array for reproduction.
 Passing trials are complete in JSON even though the text report summarizes
 them.
+
+Text-only options such as `--verbose` and `--color` cannot be combined with
+`--format json`; JSON output and its versioned schema are unchanged by terminal
+presentation settings.
 
 The contract is defined by the checked-in
 [report schema](schemas/report-v1.schema.json). Reports currently use schema

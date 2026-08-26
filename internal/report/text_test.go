@@ -14,7 +14,7 @@ import (
 	"github.com/eumarumar/concurtest/internal/report"
 )
 
-func TestWriteTextReportsViolationEvidence(t *testing.T) {
+func TestWriteTextPresentsViolationEvidenceSafely(t *testing.T) {
 	t.Parallel()
 
 	input := completedTextInput(engine.RunOutcomeViolated, -1)
@@ -23,178 +23,125 @@ func TestWriteTextReportsViolationEvidence(t *testing.T) {
 		t.Fatalf("WriteText() error = %v", err)
 	}
 
-	reportText := output.String()
-	assertContains(t, reportText,
-		"Result: VIOLATED",
-		"Trials: 1",
-		"Completed: 1",
-		"Violations: 1 of 1 completed trials",
-		"First violation: trial 1",
-		"Duration: 80ms",
-		"Execution: 2 attempts, concurrency 2",
-		`Name: "final stock must be non-negative"`,
-		`Expected: "stock" >= 0`,
-		`Observed: "stock" = -1`,
-		"Setup:",
-		`Request: "POST" "/reset"`,
-		`#1 "purchase"`,
-		"Started: +2ms",
-		"Duration: 10ms",
-		"Status: HTTP 201 Created",
-		`Response: "{\"accepted\":true}"`,
-		`#2 "purchase"`,
-		"Status: HTTP 409 Conflict",
-		"Observation:",
-		`Request: "GET" "/state?detail=full"`,
-		`Response: "{\"stock\":-1}"`,
-		`Reproduce: concurtest run "scenarios/inventory.yaml"`,
+	text := output.String()
+	assertContains(t, text,
+		"VIOLATED",
+		"1 of 1 completed trials demonstrated the violation.",
+		"Requested       1",
+		"Completed       1",
+		"First violation Trial 1",
+		"Attempts        2",
+		"Concurrency     2",
+		"final stock must be non-negative",
+		"Expected        stock >= 0",
+		"Observed        stock = -1",
+		"Baseline evidence",
+		"Violation · Trial 1",
+		"POST /reset · HTTP 204 No Content",
+		"Attempt #1     POST /purchase · HTTP 201 Created",
+		"Attempt #2     POST /purchase · HTTP 409 Conflict",
+		`Response        "{\"accepted\":true}"`,
+		"GET /state?detail=full · HTTP 200 OK",
+		`Response        "{\"stock\":-1}"`,
+		"Reproduce\n  concurtest run scenarios/inventory.yaml",
 	)
-
-	first := strings.Index(reportText, `#1 "purchase"`)
-	second := strings.Index(reportText, `#2 "purchase"`)
-	if first < 0 || second < 0 || first >= second {
-		t.Fatalf("attempt order is not stable:\n%s", reportText)
+	if first, second := strings.Index(text, "Attempt #1"), strings.Index(text, "Attempt #2"); first < 0 || first >= second {
+		t.Fatalf("attempt order is not stable:\n%s", text)
 	}
-	if strings.Contains(reportText, "request-secret") || strings.Contains(reportText, "response-secret") {
-		t.Fatalf("report exposed a header value:\n%s", reportText)
+	if strings.Contains(text, "request-secret") || strings.Contains(text, "response-secret") {
+		t.Fatalf("report exposed a header value:\n%s", text)
 	}
 }
 
-func TestWriteTextReportsMaximumSuccessfulAttemptsEvidence(t *testing.T) {
+func TestWriteTextPresentsHistoryInvariant(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name       string
-		statuses   []int
-		wantStatus string
-	}{
-		{
-			name:       "default 2xx statuses",
-			wantStatus: "Successful statuses: HTTP 200-299 (default)",
+	input := completedTextInput(engine.RunOutcomeViolated, -1)
+	definition := engine.MaximumSuccessfulAttemptsInvariant{
+		Name:                  "accepted purchases must not exceed stock",
+		Maximum:               1,
+		SuccessfulStatusCodes: []int{http.StatusCreated, http.StatusAccepted},
+	}
+	input.Scenario.Invariant = engine.Invariant{MaximumSuccessfulAttempts: &definition}
+	input.Scenario.Observation = nil
+	trial := &input.Result.Trials[0]
+	trial.Run.Observation = nil
+	trial.Run.History.Attempts[1].Execution.Response.StatusCode = http.StatusAccepted
+	trial.Run.Evaluation = &engine.InvariantEvaluation{
+		MaximumSuccessfulAttempts: &engine.MaximumSuccessfulAttemptsEvaluation{
+			Invariant: definition, SuccessfulAttemptIDs: []int{1, 2}, OverLimitAttemptIDs: []int{2}, Violated: true,
 		},
-		{
-			name:       "explicit statuses",
-			statuses:   []int{http.StatusCreated, http.StatusAccepted},
-			wantStatus: "Successful statuses: HTTP 201 Created, HTTP 202 Accepted",
-		},
+		Violated: true,
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			input := completedTextInput(engine.RunOutcomeViolated, -1)
-			definition := engine.MaximumSuccessfulAttemptsInvariant{
-				Name:                  "accepted purchases must not exceed stock",
-				Maximum:               1,
-				SuccessfulStatusCodes: test.statuses,
-			}
-			input.Scenario.Invariant = engine.Invariant{MaximumSuccessfulAttempts: &definition}
-			input.Scenario.Observation = nil
-			trial := &input.Result.Trials[0]
-			trial.Run.Observation = nil
-			trial.Run.History.Attempts[1].Execution.Response.StatusCode = http.StatusAccepted
-			historyEvaluation := engine.MaximumSuccessfulAttemptsEvaluation{
-				Invariant:            definition,
-				SuccessfulAttemptIDs: []int{1, 2},
-				OverLimitAttemptIDs:  []int{2},
-				Violated:             true,
-			}
-			trial.Run.Evaluation = &engine.InvariantEvaluation{
-				MaximumSuccessfulAttempts: &historyEvaluation,
-				Violated:                  true,
-			}
-
-			var output bytes.Buffer
-			if err := report.WriteText(&output, input); err != nil {
-				t.Fatalf("WriteText() error = %v", err)
-			}
-			assertContains(t, output.String(),
-				`Name: "accepted purchases must not exceed stock"`,
-				"Expected: at most 1 successful attempt",
-				test.wantStatus,
-				"Observed: 2 successful attempts",
-				"Successful attempts: #1, #2",
-				"Beyond maximum: #2",
-				"Observation:\n  Not configured.",
-			)
-		})
+	var output bytes.Buffer
+	if err := report.WriteText(&output, input); err != nil {
+		t.Fatalf("WriteText() error = %v", err)
 	}
+	assertContains(t, output.String(),
+		"accepted purchases must not exceed stock",
+		"Expected        At most 1 successful attempt",
+		"Success statuses HTTP 201 Created, HTTP 202 Accepted",
+		"Observed        2 successful attempts",
+		"Successful       #1, #2",
+		"Beyond maximum   #2",
+		"Observation\n    Not configured.",
+	)
 }
 
-func TestWriteTextClassifiesCompletedOutcomes(t *testing.T) {
+func TestWriteTextGroupsEquivalentViolationsButSurfacesMaterialDifferences(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name        string
-		outcome     engine.RunOutcome
-		wantResult  string
-		wantReason  string
-		attempts    []engine.Attempt
-		observation int64
-	}{
-		{
-			name:        "passed",
-			outcome:     engine.RunOutcomePassed,
-			wantResult:  "Result: PASSED",
-			observation: 0,
-		},
-		{
-			name:       "inconclusive failed attempt",
-			outcome:    engine.RunOutcomeInconclusive,
-			wantResult: "Result: INCONCLUSIVE",
-			wantReason: "2 of 2 operation attempts failed or did not start",
-			attempts: []engine.Attempt{
-				{ID: 1, OperationName: "purchase", Execution: failedExecution()},
-				{ID: 2, OperationName: "purchase", Execution: nil},
-			},
-			observation: 0,
-		},
-	}
+	base := completedTextInput(engine.RunOutcomeViolated, -1)
+	first := base.Result.Trials[0]
+	second := completedTextInput(engine.RunOutcomeViolated, -1).Result.Trials[0]
+	second.Number = 2
+	second.Run.StartedAt = second.Run.StartedAt.Add(time.Second)
+	second.Run.CompletedAt = second.Run.CompletedAt.Add(2 * time.Second)
+	second.Run.History.Attempts[0].Execution.StartedAt = second.Run.History.Attempts[0].Execution.StartedAt.Add(time.Second)
+	third := completedTextInput(engine.RunOutcomeViolated, -2).Result.Trials[0]
+	third.Number = 3
+	third.Run.Observation.Response.Body = []byte(`{"stock":-2}`)
+	fourth := completedTextInput(engine.RunOutcomeViolated, -1).Result.Trials[0]
+	fourth.Number = 4
+	fourth.Run.History.Attempts[0].Execution.Response.StatusCode = http.StatusAccepted
+	base.Result.Requested = 4
+	base.Result.Trials = []engine.TrialResult{first, second, third, fourth}
+	base.Result.CompletedAt = base.Result.StartedAt.Add(3 * time.Second)
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			input := completedTextInput(test.outcome, test.observation)
-			if test.attempts != nil {
-				input.Result.Trials[0].Run.History.Attempts = test.attempts
-			}
-			var output bytes.Buffer
-			if err := report.WriteText(&output, input); err != nil {
-				t.Fatalf("WriteText() error = %v", err)
-			}
-			assertContains(t, output.String(), test.wantResult)
-			if test.wantReason != "" {
-				assertContains(t, output.String(), test.wantReason, "Status: not started", `Error: "send request: network unavailable"`)
-			}
-		})
+	var output bytes.Buffer
+	if err := report.WriteText(&output, base); err != nil {
+		t.Fatalf("WriteText() error = %v", err)
 	}
+	text := output.String()
+	if count := strings.Count(text, "Violation · Trial"); count != 3 {
+		t.Fatalf("violation details = %d, want 3 distinct representatives\n%s", count, text)
+	}
+	assertContains(t, text,
+		"Violation · Trial 1",
+		"Violation · Trial 3",
+		"Violation · Trial 4",
+		"Trials 2 had the same violation evidence as Trial 1.",
+		"Observed        stock = -2",
+		"HTTP 202 Accepted",
+	)
 }
 
-func TestWriteTextSummarizesMixedTrialsAndExpandsOnlyNonPassingEvidence(t *testing.T) {
+func TestWriteTextAlwaysSurfacesExecutionProblems(t *testing.T) {
 	t.Parallel()
 
-	passed := completedTextInput(engine.RunOutcomePassed, 0).Result.Trials[0].Run
-	violated := completedTextInput(engine.RunOutcomeViolated, -1).Result.Trials[0].Run
-	inconclusive := completedTextInput(engine.RunOutcomeInconclusive, 0).Result.Trials[0].Run
-	inconclusive.History.Attempts[0].Execution = failedExecution()
-	errored := engine.RunResult{
-		StartedAt:   time.Unix(1_700_000_001, 0),
-		CompletedAt: time.Unix(1_700_000_001, int64(time.Millisecond)),
+	input := completedTextInput(engine.RunOutcomeViolated, -1)
+	violated := input.Result.Trials[0]
+	inconclusive := completedTextInput(engine.RunOutcomeInconclusive, 0).Result.Trials[0]
+	inconclusive.Number = 2
+	inconclusive.Run.History.Attempts[0].Execution = failedExecution()
+	errored := engine.TrialResult{
+		Number: 3, Status: engine.TrialStatusErrored,
+		Run: engine.RunResult{StartedAt: time.Unix(1_700_000_001, 0), CompletedAt: time.Unix(1_700_000_001, int64(time.Millisecond))},
+		Err: errors.New("setup unavailable"),
 	}
-	input := report.TextInput{
-		ScenarioPath: "scenario.yaml",
-		Scenario:     testScenario(),
-		Result: engine.TrialsResult{
-			Requested: 4,
-			Trials: []engine.TrialResult{
-				{Number: 1, Status: engine.TrialStatusPassed, Run: passed},
-				{Number: 2, Status: engine.TrialStatusViolated, Run: violated},
-				{Number: 3, Status: engine.TrialStatusInconclusive, Run: inconclusive},
-				{Number: 4, Status: engine.TrialStatusErrored, Run: errored, Err: errors.New("setup unavailable")},
-			},
-			StartedAt:   time.Unix(1_700_000_000, 0),
-			CompletedAt: time.Unix(1_700_000_002, 0),
-			Status:      engine.TrialStatusViolated,
-		},
-	}
+	input.Result.Requested = 3
+	input.Result.Trials = []engine.TrialResult{violated, inconclusive, errored}
 
 	var output bytes.Buffer
 	if err := report.WriteText(&output, input); err != nil {
@@ -202,58 +149,68 @@ func TestWriteTextSummarizesMixedTrialsAndExpandsOnlyNonPassingEvidence(t *testi
 	}
 	text := output.String()
 	assertContains(t, text,
-		"Result: VIOLATED",
-		"Trials: 4",
-		"Completed: 4",
-		"Passed: 1",
-		"Violated: 1",
-		"Inconclusive: 1",
-		"Errored: 1",
-		"Violations: 1 of 4 completed trials",
-		"First violation: trial 2",
-		"Trial 1: PASSED",
-		"Trial 2: VIOLATED",
-		"Trial 3: INCONCLUSIVE",
-		"Trial 4: ERRORED",
-		"Trial 2 evidence (VIOLATED):",
-		"Trial 3 evidence (INCONCLUSIVE):",
-		"Trial 4 evidence (ERRORED):",
-		`Problem: "setup unavailable"`,
-		"Observation:\n  Not reached.",
+		"Trial 2 · INCONCLUSIVE",
+		"1 of 2 attempts failed or did not start",
+		`Error           "send request: network unavailable"`,
+		"Trial 3 · ERRORED",
+		`Problem         "setup unavailable"`,
+		"Observation\n    Not reached.",
 	)
-	if strings.Contains(text, "Trial 1 evidence") {
-		t.Fatalf("passing trial evidence was expanded:\n%s", text)
-	}
-	positions := []int{
-		strings.Index(text, "Trial 2 evidence"),
-		strings.Index(text, "Trial 3 evidence"),
-		strings.Index(text, "Trial 4 evidence"),
-	}
-	if positions[0] < 0 || positions[0] >= positions[1] || positions[1] >= positions[2] {
-		t.Fatalf("trial evidence is not ordered:\n%s", text)
+	if strings.Index(text, "Violation · Trial 1") >= strings.Index(text, "Trial 2 · INCONCLUSIVE") || strings.Index(text, "Trial 2 · INCONCLUSIVE") >= strings.Index(text, "Trial 3 · ERRORED") {
+		t.Fatalf("problem evidence is not in trial order:\n%s", text)
 	}
 }
 
-func TestWriteTextReportsInterruptedPartialSequence(t *testing.T) {
+func TestWriteTextVerboseExpandsEveryRetainedTrial(t *testing.T) {
 	t.Parallel()
 
-	input := completedTextInput(engine.RunOutcomePassed, 0)
+	input := completedTextInput(engine.RunOutcomeViolated, -1)
+	first := input.Result.Trials[0]
+	second := first
+	second.Number = 2
+	passed := completedTextInput(engine.RunOutcomePassed, 0).Result.Trials[0]
+	passed.Number = 3
 	input.Result.Requested = 3
-	input.RunError = context.Canceled
-	var output bytes.Buffer
-	if err := report.WriteText(&output, input); err != nil {
-		t.Fatalf("WriteText() error = %v", err)
+	input.Result.Trials = []engine.TrialResult{first, second, passed}
+
+	var compact, verbose bytes.Buffer
+	if err := report.WriteText(&compact, input); err != nil {
+		t.Fatal(err)
 	}
-	assertContains(t, output.String(),
-		"Result: ERROR",
-		"Trials: 3",
-		"Completed: 1",
-		"Trial 1: PASSED",
-		"Problem: the trial sequence was canceled",
-	)
+	if err := report.WriteTextWithOptions(&verbose, input, report.TextOptions{Verbose: true}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(compact.String(), "Trial 3 · PASSED") {
+		t.Fatalf("compact report expanded a passing trial:\n%s", compact.String())
+	}
+	assertContains(t, verbose.String(), "Violation · Trial 1", "Violation · Trial 2", "Trial 3 · PASSED")
+	if strings.Contains(verbose.String(), "Use --verbose") || strings.Contains(verbose.String(), "same violation evidence") {
+		t.Fatalf("verbose report retained compact summaries:\n%s", verbose.String())
+	}
 }
 
-func TestWriteTextReportsReducedCandidateAndExactReproduction(t *testing.T) {
+func TestWriteTextColorIsOptionalAndDoesNotColorCommands(t *testing.T) {
+	t.Parallel()
+
+	input := completedTextInput(engine.RunOutcomeViolated, -1)
+	var plain, colored bytes.Buffer
+	if err := report.WriteTextWithOptions(&plain, input, report.TextOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := report.WriteTextWithOptions(&colored, input, report.TextOptions{Color: true}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(plain.String(), "\x1b[") {
+		t.Fatalf("plain report contains ANSI escapes: %q", plain.String())
+	}
+	assertContains(t, colored.String(), "\x1b[", "\x1b[0m")
+	command := "  concurtest run scenarios/inventory.yaml\n"
+	if !strings.Contains(colored.String(), command) || strings.Contains(command, "\x1b[") {
+		t.Fatalf("reproduction command is not plain and copyable:\n%q", colored.String())
+	}
+}
+
+func TestWriteTextReductionKeepsBaselineFirstAndAvoidsDuplicateEvidence(t *testing.T) {
 	t.Parallel()
 
 	input := completedTextInput(engine.RunOutcomeViolated, -1)
@@ -261,195 +218,63 @@ func TestWriteTextReportsReducedCandidateAndExactReproduction(t *testing.T) {
 	input.Scenario.Concurrency = 4
 	selected := completedTextInput(engine.RunOutcomeViolated, -1).Result
 	input.Reduction = &reduction.Result{
-		StartedAt:   input.Result.StartedAt,
-		CompletedAt: input.Result.CompletedAt.Add(time.Second),
-		Baseline:    input.Result,
-		Candidates: []reduction.CandidateResult{
-			{
-				Candidate: reduction.Candidate{Attempts: 2, Concurrency: 2},
-				Summary: reduction.TrialSummary{
-					Requested: 1,
-					Completed: 1,
-					Violated:  1,
-				},
-				Accepted: true,
-				Trials:   &selected,
-			},
-		},
-		Selected:       reduction.Candidate{Attempts: 2, Concurrency: 2},
-		SelectedTrials: &selected,
-		Status:         reduction.StatusReduced,
+		StartedAt: input.Result.StartedAt, CompletedAt: input.Result.CompletedAt.Add(time.Second), Baseline: input.Result,
+		Candidates: []reduction.CandidateResult{{
+			Candidate: reduction.Candidate{Attempts: 2, Concurrency: 2},
+			Summary:   reduction.TrialSummary{Requested: 1, Completed: 1, Violated: 1},
+			Accepted:  true, Trials: &selected,
+		}},
+		Selected: reduction.Candidate{Attempts: 2, Concurrency: 2}, SelectedTrials: &selected, Status: reduction.StatusReduced,
 	}
 
-	var output bytes.Buffer
-	if err := report.WriteText(&output, input); err != nil {
-		t.Fatalf("WriteText() error = %v", err)
+	var compact bytes.Buffer
+	if err := report.WriteText(&compact, input); err != nil {
+		t.Fatal(err)
 	}
-	text := output.String()
+	text := compact.String()
 	assertContains(t, text,
-		"Reduction: REDUCED",
-		"Candidates evaluated: 1",
-		"2 attempts, concurrency 2: 0 passed, 1 violated, 0 inconclusive, 0 errored; 1 of 1 completed",
-		"— selected",
-		"Smallest observed failure:",
-		"Attempts: 2",
-		"Concurrency: 2",
-		"Violations: 1 of 1 trials",
-		"not proof that no smaller failure exists",
-		"Selected trial results:",
-		`Reproduce: concurtest run --attempts 2 --concurrency 2 --no-reduce "scenarios/inventory.yaml"`,
+		"Baseline evidence",
+		"Reduction\n  Status          REDUCED",
+		"Smallest observed failure",
+		"Attempts      2",
+		"Concurrency   2",
+		"Selected candidate violations matched the baseline evidence.",
+		"concurtest run --attempts 2 --concurrency 2 --no-reduce scenarios/inventory.yaml",
 	)
-	if strings.Count(text, "Reproduce:") != 1 {
-		t.Fatalf("reproduction commands = %d, want 1\n%s", strings.Count(text, "Reproduce:"), text)
+	if strings.Index(text, "Baseline evidence") >= strings.Index(text, "Reduction\n") {
+		t.Fatalf("baseline was not reported before reduction:\n%s", text)
 	}
-	if strings.Contains(text, "Baseline trial results:") {
-		t.Fatalf("qualified baseline evidence was expanded:\n%s", text)
+
+	var verbose bytes.Buffer
+	if err := report.WriteTextWithOptions(&verbose, input, report.TextOptions{Verbose: true}); err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, verbose.String(), "Candidate results", "Selected candidate evidence")
+	if strings.Count(verbose.String(), "Violation · Trial 1") != 1 || strings.Count(verbose.String(), "Trial 1 · VIOLATED") != 1 {
+		t.Fatalf("verbose report did not retain baseline and selected evidence:\n%s", verbose.String())
 	}
 }
 
-func TestWriteTextReportsSkippedUnchangedAndLimitedReduction(t *testing.T) {
+func TestWriteTextQuotesReproductionPathsForPOSIXShells(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name       string
-		status     reduction.Status
-		selected   bool
-		want       []string
-		candidates int
-	}{
-		{
-			name:   "skipped",
-			status: reduction.StatusSkipped,
-			want: []string{
-				"Reduction: NOT RUN",
-				"a strict majority is required",
-				"Baseline trial results:",
-			},
-		},
-		{
-			name:       "unchanged",
-			status:     reduction.StatusUnchanged,
-			selected:   true,
-			candidates: 1,
-			want: []string{
-				"Reduction: UNCHANGED",
-				"No smaller tested configuration met the reproduction rule.",
-			},
-		},
-		{
-			name:       "limited",
-			status:     reduction.StatusLimited,
-			selected:   true,
-			candidates: 1,
-			want: []string{
-				"Reduction: SEARCH LIMIT REACHED",
-				"100-candidate search limit was reached",
-				"smaller untested configurations may remain",
-			},
-		},
+	tests := []struct{ path, want string }{
+		{"scenario.yaml", "concurtest run scenario.yaml"},
+		{"path with spaces/scenario.yaml", "concurtest run 'path with spaces/scenario.yaml'"},
+		{"owner's scenario.yaml", `concurtest run 'owner'"'"'s scenario.yaml'`},
+		{"$(touch nope).yaml", "concurtest run '$(touch nope).yaml'"},
+		{"-scenario.yaml", "concurtest run ./-scenario.yaml"},
+		{"", "concurtest run ''"},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			input := completedTextInput(engine.RunOutcomeViolated, -1)
-			if test.status == reduction.StatusSkipped {
-				input = completedTextInput(engine.RunOutcomePassed, 0)
-			}
-			reduced := reduction.Result{
-				StartedAt:   input.Result.StartedAt,
-				CompletedAt: input.Result.CompletedAt,
-				Baseline:    input.Result,
-				Status:      test.status,
-			}
-			for range test.candidates {
-				reduced.Candidates = append(reduced.Candidates, reduction.CandidateResult{
-					Candidate: reduction.Candidate{Attempts: 2, Concurrency: 2},
-					Summary:   reduction.TrialSummary{Requested: 1, Completed: 1, Passed: 1},
-				})
-			}
-			if test.selected {
-				selected := input.Result
-				reduced.Selected = reduction.Candidate{Attempts: 4, Concurrency: 4}
-				reduced.SelectedTrials = &selected
-			}
-			input.Reduction = &reduced
+		t.Run(test.path, func(t *testing.T) {
+			input := completedTextInput(engine.RunOutcomePassed, 0)
+			input.ScenarioPath = test.path
 			var output bytes.Buffer
 			if err := report.WriteText(&output, input); err != nil {
-				t.Fatalf("WriteText() error = %v", err)
+				t.Fatal(err)
 			}
-			assertContains(t, output.String(), test.want...)
-		})
-	}
-}
-
-func TestWriteTextReportsInterruptedCandidateEvidence(t *testing.T) {
-	t.Parallel()
-
-	input := completedTextInput(engine.RunOutcomeViolated, -1)
-	partial := completedTextInput(engine.RunOutcomeInconclusive, 0).Result
-	input.RunError = context.Canceled
-	input.Reduction = &reduction.Result{
-		StartedAt:   input.Result.StartedAt,
-		CompletedAt: input.Result.CompletedAt,
-		Baseline:    input.Result,
-		Candidates: []reduction.CandidateResult{
-			{
-				Candidate: reduction.Candidate{Attempts: 2, Concurrency: 2},
-				Summary:   reduction.TrialSummary{Requested: 3, Completed: 1, Inconclusive: 1},
-				Trials:    &partial,
-				Err:       context.Canceled,
-			},
-		},
-	}
-
-	var output bytes.Buffer
-	if err := report.WriteText(&output, input); err != nil {
-		t.Fatalf("WriteText() error = %v", err)
-	}
-	assertContains(t, output.String(),
-		"Result: ERROR",
-		"Reduction: INTERRUPTED",
-		"Interrupted candidate: 2 attempts, concurrency 2",
-		"Interrupted candidate trial results:",
-	)
-}
-
-func TestWriteTextReportsPartialRunErrors(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		runErr   error
-		wantText []string
-	}{
-		{
-			name:     "canceled",
-			runErr:   context.Canceled,
-			wantText: []string{"Result: ERROR", "Problem: the trial sequence was canceled", "Trials: 1", "Completed: 0"},
-		},
-		{
-			name:     "stage failure",
-			runErr:   errors.New("observation returned HTTP 503"),
-			wantText: []string{"Result: ERROR", `Problem: "observation returned HTTP 503"`, "Next step: check the target and scenario, then try again."},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			input := report.TextInput{
-				ScenarioPath: "scenario.yaml",
-				Scenario:     testScenario(),
-				Result: engine.TrialsResult{
-					Requested:   1,
-					StartedAt:   time.Unix(0, 0),
-					CompletedAt: time.Unix(0, int64(time.Millisecond)),
-				},
-				RunError: test.runErr,
-			}
-			var output bytes.Buffer
-			if err := report.WriteText(&output, input); err != nil {
-				t.Fatalf("WriteText() error = %v", err)
-			}
-			assertContains(t, output.String(), test.wantText...)
+			assertContains(t, output.String(), test.want)
 		})
 	}
 }
@@ -458,24 +283,35 @@ func TestWriteTextBoundsAndEscapesResponseBodies(t *testing.T) {
 	t.Parallel()
 
 	input := completedTextInput(engine.RunOutcomeViolated, -1)
-	input.Result.Trials[0].Run.History.Attempts[0].Execution.Response.Body = []byte(strings.Repeat("x", 513) + "hidden-tail")
-	input.Result.Trials[0].Run.History.Attempts[1].Execution.Response.Body = []byte("first\nsecond")
-	input.Result.Trials[0].Run.History.Attempts[1].Execution.Response.BodyTruncated = true
-
+	longBody := append(bytes.Repeat([]byte("x"), 600), []byte("hidden-tail")...)
+	input.Result.Trials[0].Run.History.Attempts[0].Execution.Response.Body = longBody
+	input.Result.Trials[0].Run.Observation.Response.Body = []byte("first\nsecond")
+	input.Result.Trials[0].Run.Observation.Response.BodyTruncated = true
 	var output bytes.Buffer
 	if err := report.WriteText(&output, input); err != nil {
-		t.Fatalf("WriteText() error = %v", err)
+		t.Fatal(err)
 	}
-	reportText := output.String()
-	if strings.Contains(reportText, "hidden-tail") {
+	text := output.String()
+	if strings.Contains(text, "hidden-tail") {
 		t.Fatal("report included bytes beyond the response excerpt limit")
 	}
-	if count := strings.Count(reportText, "[truncated]"); count != 2 {
-		t.Errorf("truncation markers = %d, want 2\n%s", count, reportText)
+	if count := strings.Count(text, "[truncated]"); count != 2 {
+		t.Fatalf("truncation markers = %d, want 2\n%s", count, text)
 	}
-	if !strings.Contains(reportText, `"first\nsecond" [truncated]`) {
-		t.Fatalf("response body was not escaped onto one line:\n%s", reportText)
+	assertContains(t, text, `"first\nsecond" [truncated]`)
+}
+
+func TestWriteTextReportsInterruptedSequence(t *testing.T) {
+	t.Parallel()
+
+	input := completedTextInput(engine.RunOutcomePassed, 0)
+	input.Result.Requested = 3
+	input.RunError = context.Canceled
+	var output bytes.Buffer
+	if err := report.WriteText(&output, input); err != nil {
+		t.Fatal(err)
 	}
+	assertContains(t, output.String(), "ERROR", "stopped after 1 of 3 requested trials", "Execution problem", "trial sequence was canceled")
 }
 
 func TestWriteTextReturnsWriterAndInputErrors(t *testing.T) {
@@ -487,6 +323,9 @@ func TestWriteTextReturnsWriterAndInputErrors(t *testing.T) {
 	}
 	if err := report.WriteText(nil, completedTextInput(engine.RunOutcomePassed, 0)); err == nil {
 		t.Fatal("WriteText(nil) error = nil, want error")
+	}
+	if err := report.WriteTextStart(nil, report.TextStartInput{}, report.TextOptions{}); err == nil {
+		t.Fatal("WriteTextStart(nil) error = nil, want error")
 	}
 
 	var output bytes.Buffer
@@ -503,44 +342,14 @@ func TestWriteTextReturnsWriterAndInputErrors(t *testing.T) {
 func completedTextInput(outcome engine.RunOutcome, observed int64) report.TextInput {
 	start := time.Unix(1_700_000_000, 0)
 	scenario := testScenario()
-	setup := successfulExecution(
-		scenario.Setup,
-		start.Add(time.Millisecond),
-		2*time.Millisecond,
-		http.StatusNoContent,
-		nil,
-	)
-	first := successfulExecution(
-		&scenario.Operation.Request,
-		start.Add(12*time.Millisecond),
-		10*time.Millisecond,
-		http.StatusCreated,
-		[]byte(`{"accepted":true}`),
-	)
-	second := successfulExecution(
-		&scenario.Operation.Request,
-		start.Add(13*time.Millisecond),
-		8*time.Millisecond,
-		http.StatusConflict,
-		[]byte("out of stock"),
-	)
-	observation := successfulExecution(
-		scenario.Observation,
-		start.Add(60*time.Millisecond),
-		5*time.Millisecond,
-		http.StatusOK,
-		[]byte(`{"stock":-1}`),
-	)
-	jsonEvaluation := engine.JSONIntegerMinimumEvaluation{
-		Invariant: *scenario.Invariant.JSONIntegerMinimum,
-		Observed:  observed,
-		Violated:  outcome == engine.RunOutcomeViolated,
-	}
+	setup := successfulExecution(scenario.Setup, start.Add(time.Millisecond), 2*time.Millisecond, http.StatusNoContent, nil)
+	first := successfulExecution(&scenario.Operation.Request, start.Add(12*time.Millisecond), 10*time.Millisecond, http.StatusCreated, []byte(`{"accepted":true}`))
+	second := successfulExecution(&scenario.Operation.Request, start.Add(13*time.Millisecond), 8*time.Millisecond, http.StatusConflict, []byte("out of stock"))
+	observation := successfulExecution(scenario.Observation, start.Add(60*time.Millisecond), 5*time.Millisecond, http.StatusOK, []byte(`{"stock":-1}`))
 	evaluation := engine.InvariantEvaluation{
-		JSONIntegerMinimum: &jsonEvaluation,
+		JSONIntegerMinimum: &engine.JSONIntegerMinimumEvaluation{Invariant: *scenario.Invariant.JSONIntegerMinimum, Observed: observed, Violated: outcome == engine.RunOutcomeViolated},
 		Violated:           outcome == engine.RunOutcomeViolated,
 	}
-
 	status := engine.TrialStatusPassed
 	switch outcome {
 	case engine.RunOutcomeViolated:
@@ -549,31 +358,13 @@ func completedTextInput(outcome engine.RunOutcome, observed int64) report.TextIn
 		status = engine.TrialStatusInconclusive
 	}
 	run := engine.RunResult{
-		StartedAt:   start,
-		CompletedAt: start.Add(80 * time.Millisecond),
-		Setup:       setup,
-		History: engine.History{
-			StartedAt:   start.Add(10 * time.Millisecond),
-			CompletedAt: start.Add(50 * time.Millisecond),
-			Attempts: []engine.Attempt{
-				{ID: 1, OperationName: "purchase", Execution: first},
-				{ID: 2, OperationName: "purchase", Execution: second},
-			},
-		},
-		Observation: observation,
-		Evaluation:  &evaluation,
-		Outcome:     outcome,
+		StartedAt: start, CompletedAt: start.Add(80 * time.Millisecond), Setup: setup,
+		History:     engine.History{StartedAt: start.Add(10 * time.Millisecond), CompletedAt: start.Add(50 * time.Millisecond), Attempts: []engine.Attempt{{ID: 1, OperationName: "purchase", Execution: first}, {ID: 2, OperationName: "purchase", Execution: second}}},
+		Observation: observation, Evaluation: &evaluation, Outcome: outcome,
 	}
 	return report.TextInput{
-		ScenarioPath: "scenarios/inventory.yaml",
-		Scenario:     scenario,
-		Result: engine.TrialsResult{
-			Requested:   1,
-			Trials:      []engine.TrialResult{{Number: 1, Status: status, Run: run}},
-			StartedAt:   start,
-			CompletedAt: start.Add(80 * time.Millisecond),
-			Status:      status,
-		},
+		ScenarioPath: "scenarios/inventory.yaml", Scenario: scenario,
+		Result: engine.TrialsResult{Requested: 1, Trials: []engine.TrialResult{{Number: 1, Status: status, Run: run}}, StartedAt: start, CompletedAt: start.Add(80 * time.Millisecond), Status: status},
 	}
 }
 
@@ -581,57 +372,26 @@ func testScenario() engine.Scenario {
 	secretHeader := http.Header{"Authorization": {"request-secret"}}
 	setup := engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/reset", Header: secretHeader}
 	return engine.Scenario{
-		Setup: &setup,
-		Operation: engine.Operation{
-			Name: "purchase",
-			Request: engine.HTTPRequest{
-				Method: http.MethodPost,
-				URL:    "http://example.test/purchase",
-				Header: secretHeader,
-			},
-		},
-		Attempts:    2,
-		Concurrency: 2,
-		Observation: &engine.HTTPRequest{
-			Method: http.MethodGet,
-			URL:    "http://example.test/state?detail=full",
-			Header: secretHeader,
-		},
-		Invariant: engine.Invariant{
-			JSONIntegerMinimum: &engine.JSONIntegerMinimumInvariant{
-				Name:    "final stock must be non-negative",
-				Field:   "stock",
-				Minimum: 0,
-			},
-		},
+		Setup:     &setup,
+		Operation: engine.Operation{Name: "purchase", Request: engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/purchase", Header: secretHeader}},
+		Attempts:  2, Concurrency: 2,
+		Observation: &engine.HTTPRequest{Method: http.MethodGet, URL: "http://example.test/state?detail=full", Header: secretHeader},
+		Invariant:   engine.Invariant{JSONIntegerMinimum: &engine.JSONIntegerMinimumInvariant{Name: "final stock must be non-negative", Field: "stock", Minimum: 0}},
 	}
 }
 
-func successfulExecution(
-	request *engine.HTTPRequest,
-	startedAt time.Time,
-	duration time.Duration,
-	status int,
-	body []byte,
-) *engine.HTTPExecution {
+func successfulExecution(request *engine.HTTPRequest, startedAt time.Time, duration time.Duration, status int, body []byte) *engine.HTTPExecution {
 	return &engine.HTTPExecution{
-		Request:     *request,
-		StartedAt:   startedAt,
-		CompletedAt: startedAt.Add(duration),
-		Response: &engine.HTTPResponse{
-			StatusCode: status,
-			Header:     http.Header{"X-Secret": {"response-secret"}},
-			Body:       body,
-		},
+		Request: *request, StartedAt: startedAt, CompletedAt: startedAt.Add(duration),
+		Response: &engine.HTTPResponse{StatusCode: status, Header: http.Header{"X-Secret": {"response-secret"}}, Body: body},
 	}
 }
 
 func failedExecution() *engine.HTTPExecution {
 	return &engine.HTTPExecution{
-		Request:     engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/purchase"},
-		StartedAt:   time.Unix(1_700_000_000, 0),
-		CompletedAt: time.Unix(1_700_000_000, int64(time.Millisecond)),
-		Err:         errors.New("send request: network unavailable"),
+		Request:   engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/purchase"},
+		StartedAt: time.Unix(1_700_000_000, 0), CompletedAt: time.Unix(1_700_000_000, int64(time.Millisecond)),
+		Err: errors.New("send request: network unavailable"),
 	}
 }
 
@@ -644,10 +404,6 @@ func assertContains(t *testing.T, value string, fragments ...string) {
 	}
 }
 
-type errorWriter struct {
-	err error
-}
+type errorWriter struct{ err error }
 
-func (writer errorWriter) Write([]byte) (int, error) {
-	return 0, writer.err
-}
+func (writer errorWriter) Write([]byte) (int, error) { return 0, writer.err }

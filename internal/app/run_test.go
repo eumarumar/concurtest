@@ -37,7 +37,7 @@ func TestRunShowsHelp(t *testing.T) {
 			if code := app.Run(context.Background(), args, &stdout, &stderr); code != 0 {
 				t.Errorf("Run() exit code = %d, want 0", code)
 			}
-			if !strings.Contains(stdout.String(), "concurtest run [--attempts N] [--concurrency N] [--no-reduce] [--format text|json] <scenario.yaml>") {
+			if !strings.Contains(stdout.String(), "concurtest run [--attempts N] [--concurrency N] [--no-reduce] [--format text|json] [--verbose] [--color auto|always|never] <scenario.yaml>") {
 				t.Errorf("stdout does not contain usage:\n%s", stdout.String())
 			}
 			if stderr.Len() != 0 {
@@ -65,6 +65,10 @@ func TestRunRejectsInvalidArguments(t *testing.T) {
 		{name: "duplicate option", args: []string{"run", "--attempts=2", "--attempts=3", "scenario.yaml"}, want: "run accepts --attempts only once"},
 		{name: "invalid format", args: []string{"run", "--format=xml", "scenario.yaml"}, want: `--format must be text or json, got "xml"`},
 		{name: "missing format", args: []string{"run", "--format"}, want: "--format needs text or json"},
+		{name: "invalid color", args: []string{"run", "--color=sometimes", "scenario.yaml"}, want: `--color must be auto, always, or never, got "sometimes"`},
+		{name: "missing color", args: []string{"run", "--color"}, want: "--color needs auto, always, or never"},
+		{name: "duplicate color", args: []string{"run", "--color=auto", "--color=never", "scenario.yaml"}, want: "run accepts --color only once"},
+		{name: "duplicate verbose", args: []string{"run", "--verbose", "--verbose", "scenario.yaml"}, want: "run accepts --verbose only once"},
 	}
 
 	for _, test := range tests {
@@ -107,6 +111,16 @@ func TestRunWritesJSONForEarlyFailures(t *testing.T) {
 		{
 			name:     "duplicate format after JSON selection",
 			args:     []string{"run", "--format=json", "--format=text", "scenario.yaml"},
+			wantCode: "invalid_command",
+		},
+		{
+			name:     "verbose conflicts with JSON",
+			args:     []string{"run", "--format=json", "--verbose", "scenario.yaml"},
+			wantCode: "invalid_command",
+		},
+		{
+			name:     "color conflicts with JSON",
+			args:     []string{"run", "--color=never", "--format", "json", "scenario.yaml"},
 			wantCode: "invalid_command",
 		},
 	}
@@ -225,7 +239,7 @@ func TestRunReportsViolationAndPrintsTargetBeforeRequests(t *testing.T) {
 	var requestNumber atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if requestNumber.Add(1) == 1 {
-			targetShownBeforeRequests.Store(strings.Contains(output.String(), "Target: "+serverURL(request)))
+			targetShownBeforeRequests.Store(strings.Contains(output.String(), "Target · "+serverURL(request)))
 		}
 		switch request.URL.Path {
 		case "/reset":
@@ -256,21 +270,21 @@ func TestRunReportsViolationAndPrintsTargetBeforeRequests(t *testing.T) {
 		t.Errorf("stderr = %q, want empty", stderr.String())
 	}
 	assertOutputContains(t, output.String(),
-		"Scenario: \"inventory oversell\"",
-		"Target: "+server.URL,
-		"Warning: this command sends concurrent requests and may modify target state.",
-		"Result: VIOLATED",
-		"Trials: 1",
-		"Completed: 1",
-		"Violations: 1 of 1 completed trials",
-		"First violation: trial 1",
-		`Expected: "stock" >= 0`,
-		`Observed: "stock" = -1`,
-		`#1 "purchase"`,
-		`#2 "purchase"`,
-		"Status: HTTP 201 Created",
-		`Response: "{\"stock\":-1}"`,
-		"Reproduce: concurtest run "+fmt.Sprintf("%q", path),
+		"ConcurTest · inventory oversell",
+		"Target · "+server.URL,
+		"Warning · This run sends concurrent requests and may change target data.",
+		"VIOLATED",
+		"Requested       1",
+		"Completed       1",
+		"1 of 1 completed trials demonstrated the violation",
+		"First violation Trial 1",
+		"Expected        stock >= 0",
+		"Observed        stock = -1",
+		"Attempt #1",
+		"Attempt #2",
+		"HTTP 201 Created",
+		`Response        "{\"stock\":-1}"`,
+		"concurtest run "+path,
 	)
 	if strings.Contains(output.String(), "request-secret") || strings.Contains(output.String(), "response-secret") {
 		t.Fatalf("output exposed a header value:\n%s", output.String())
@@ -301,9 +315,56 @@ func TestRunReturnsSuccessForTrustworthyPass(t *testing.T) {
 	if code := app.Run(context.Background(), []string{"run", path}, &stdout, &stderr); code != 0 {
 		t.Fatalf("Run() exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
 	}
-	assertOutputContains(t, stdout.String(), "Result: PASSED", "Trials: 1", "Trial 1: PASSED")
-	if strings.Contains(stdout.String(), "Invariant:") || strings.Contains(stdout.String(), "Attempts:") {
+	assertOutputContains(t, stdout.String(), "PASSED", "Requested       1", "All 1 passing trials are summarized above.")
+	if strings.Contains(stdout.String(), "Trial 1 · PASSED") {
 		t.Fatalf("passing trial evidence was expanded:\n%s", stdout.String())
+	}
+}
+
+func TestRunAppliesTextPresentationOptionsWithoutChangingExecution(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests.Add(1)
+		switch request.URL.Path {
+		case "/purchase":
+			writer.WriteHeader(http.StatusCreated)
+		case "/state":
+			_, _ = writer.Write([]byte(`{"stock":0}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	path := writeScenarioFile(t, scenarioYAML(server.URL, "1s", 1, 1, false))
+	t.Setenv("NO_COLOR", "1")
+
+	tests := []struct {
+		name       string
+		args       []string
+		wantANSI   bool
+		wantDetail bool
+	}{
+		{name: "auto respects NO_COLOR", args: []string{"run", path}},
+		{name: "never stays plain", args: []string{"run", "--color=never", path}},
+		{name: "always overrides NO_COLOR", args: []string{"run", "--color", "always", path}, wantANSI: true},
+		{name: "verbose expands passing evidence", args: []string{"run", "--verbose", path}, wantDetail: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := app.Run(context.Background(), test.args, &stdout, &stderr); code != 0 {
+				t.Fatalf("Run() exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+			}
+			if got := strings.Contains(stdout.String(), "\x1b["); got != test.wantANSI {
+				t.Fatalf("ANSI presence = %t, want %t\n%q", got, test.wantANSI, stdout.String())
+			}
+			if got := strings.Contains(stdout.String(), "Trial 1 · PASSED"); got != test.wantDetail {
+				t.Fatalf("passing detail presence = %t, want %t\n%s", got, test.wantDetail, stdout.String())
+			}
+		})
+	}
+	if requests.Load() != 8 {
+		t.Fatalf("requests = %d, want 8 across four identical two-request runs", requests.Load())
 	}
 }
 
@@ -330,8 +391,8 @@ func TestRunUsesRequestTimeoutAndReturnsInconclusive(t *testing.T) {
 		t.Fatalf("Run() exit code = %d, want 2\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
 	}
 	assertOutputContains(t, stdout.String(),
-		"Result: INCONCLUSIVE",
-		"1 of 1 operation attempts failed or did not start",
+		"INCONCLUSIVE",
+		"1 of 1 attempts failed or did not start",
 		"Client.Timeout exceeded",
 	)
 }
@@ -368,14 +429,14 @@ func TestRunContinuesAfterTrialErrorAndViolationControlsExitCode(t *testing.T) {
 		t.Errorf("stderr = %q, want empty", stderr.String())
 	}
 	assertOutputContains(t, stdout.String(),
-		"Result: VIOLATED",
-		"Trials: 2",
-		"Completed: 2",
-		"Violated: 1",
-		"Errored: 1",
-		"First violation: trial 2",
-		"Trial 1: ERRORED",
-		"Trial 2: VIOLATED",
+		"VIOLATED",
+		"Requested       2",
+		"Completed       2",
+		"Violated        1",
+		"Errored         1",
+		"First violation Trial 2",
+		"Trial 1 · ERRORED",
+		"Violation · Trial 2",
 	)
 }
 
@@ -396,7 +457,7 @@ func TestRunReturnsErrorForErroredTrial(t *testing.T) {
 	if code := app.Run(context.Background(), []string{"run", path}, &stdout, &stderr); code != 2 {
 		t.Fatalf("Run() exit code = %d, want 2\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
 	}
-	assertOutputContains(t, stdout.String(), "Result: ERROR", "Errored: 1", "Trial 1: ERRORED")
+	assertOutputContains(t, stdout.String(), "ERROR", "Errored         1", "Trial 1 · ERRORED")
 }
 
 func TestRunReducesToSmallestObservedCandidate(t *testing.T) {
@@ -437,15 +498,15 @@ func TestRunReducesToSmallestObservedCandidate(t *testing.T) {
 		t.Errorf("stderr = %q, want empty", stderr.String())
 	}
 	assertOutputContains(t, stdout.String(),
-		"Reduction: enabled; up to 100 smaller configurations may be tested.",
-		"Reduction: REDUCED",
-		"Candidates evaluated: 1",
-		"Smallest observed failure:",
-		"Attempts: 2",
-		"Concurrency: 2",
-		"Violations: 3 of 3 trials",
+		"Reduction · Up to 100 smaller configurations may also run.",
+		"Status          REDUCED",
+		"Candidates      1 evaluated",
+		"Smallest observed failure",
+		"Attempts      2",
+		"Concurrency   2",
+		"Violations    3 of 3 trials",
 		"not proof that no smaller failure exists",
-		"Reproduce: concurtest run --attempts 2 --concurrency 2 --no-reduce "+fmt.Sprintf("%q", path),
+		"concurtest run --attempts 2 --concurrency 2 --no-reduce "+path,
 	)
 	if setups.Load() != 6 {
 		t.Errorf("setup calls = %d, want 6 for baseline and selected candidate", setups.Load())
@@ -477,8 +538,8 @@ func TestRunAppliesExecutionOverridesAndDisablesReduction(t *testing.T) {
 	if code := app.Run(context.Background(), args, &stdout, &stderr); code != 1 {
 		t.Fatalf("Run() exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
 	}
-	assertOutputContains(t, stdout.String(), "Execution: 2 attempts, concurrency 2")
-	if strings.Contains(stdout.String(), "Reduction: enabled") || strings.Contains(stdout.String(), "Reduction: REDUCED") {
+	assertOutputContains(t, stdout.String(), "Attempts        2", "Concurrency     2")
+	if strings.Contains(stdout.String(), "Up to 100 smaller configurations") || strings.Contains(stdout.String(), "Status          REDUCED") {
 		t.Fatalf("reduction ran despite --no-reduce:\n%s", stdout.String())
 	}
 	if requests.Load() != 12 {
@@ -539,7 +600,7 @@ func TestRunPropagatesCanceledContextWithoutRequests(t *testing.T) {
 	if requests.Load() != 0 {
 		t.Errorf("requests = %d, want 0", requests.Load())
 	}
-	assertOutputContains(t, stdout.String(), "Result: ERROR", "Problem: the trial sequence was canceled", "Trials: 1", "Completed: 0")
+	assertOutputContains(t, stdout.String(), "ERROR", "trial sequence was canceled", "Requested       1", "Completed       0")
 }
 
 func TestRunHandlesOutputFailures(t *testing.T) {
@@ -573,7 +634,7 @@ func TestRunHandlesOutputFailures(t *testing.T) {
 
 	t.Run("while reporting", func(t *testing.T) {
 		requests.Store(0)
-		writer := &failOnWriteWriter{failAt: 2, err: wantErr}
+		writer := &failOnWriteWriter{failAt: 3, err: wantErr}
 		var stderr bytes.Buffer
 		if code := app.Run(context.Background(), []string{"run", path}, writer, &stderr); code != 2 {
 			t.Errorf("Run() exit code = %d, want 2", code)

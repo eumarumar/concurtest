@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/term"
+
 	"github.com/eumarumar/concurtest/internal/engine"
 	"github.com/eumarumar/concurtest/internal/failure"
 	"github.com/eumarumar/concurtest/internal/reduction"
@@ -92,7 +94,15 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	}
 
 	if options.format == outputText {
-		if err := writeStart(stdout, definition); err != nil {
+		textOptions := report.TextOptions{
+			Verbose: options.verbose,
+			Color:   shouldUseColor(options.color, stdout),
+		}
+		if err := report.WriteTextStart(stdout, report.TextStartInput{
+			ScenarioName:     definition.Name,
+			Target:           definition.Target,
+			ReductionEnabled: definition.Reduce,
+		}, textOptions); err != nil {
 			writeDiagnostic(stderr, "Could not write the run details: %v", err)
 			return exitError
 		}
@@ -144,7 +154,10 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	if options.format == outputJSON {
 		reportErr = report.WriteJSON(stdout, reportInput)
 	} else {
-		reportErr = report.WriteText(stdout, reportInput)
+		reportErr = report.WriteTextWithOptions(stdout, reportInput, report.TextOptions{
+			Verbose: options.verbose,
+			Color:   shouldUseColor(options.color, stdout),
+		})
 	}
 	if reportErr != nil {
 		writeDiagnostic(stderr, "Could not write the run report: %v", reportErr)
@@ -183,6 +196,9 @@ type runOptions struct {
 	noReduce       bool
 	format         outputFormat
 	formatSet      bool
+	verbose        bool
+	color          colorMode
+	colorSet       bool
 }
 
 type outputFormat string
@@ -190,6 +206,14 @@ type outputFormat string
 const (
 	outputText outputFormat = "text"
 	outputJSON outputFormat = "json"
+)
+
+type colorMode string
+
+const (
+	colorAuto   colorMode = "auto"
+	colorAlways colorMode = "always"
+	colorNever  colorMode = "never"
 )
 
 func runOptionsFromArgs(args []string) (runOptions, error) {
@@ -200,7 +224,7 @@ func runOptionsFromArgs(args []string) (runOptions, error) {
 		return runOptions{}, fmt.Errorf("unknown command %q", args[0])
 	}
 
-	options := runOptions{format: outputText}
+	options := runOptions{format: outputText, color: colorAuto}
 	for index := 1; index < len(args); index++ {
 		argument := args[index]
 		switch {
@@ -209,6 +233,27 @@ func runOptionsFromArgs(args []string) (runOptions, error) {
 				return runOptions{}, errors.New("run accepts --no-reduce only once")
 			}
 			options.noReduce = true
+		case argument == "--verbose":
+			if options.verbose {
+				return runOptions{}, errors.New("run accepts --verbose only once")
+			}
+			options.verbose = true
+		case argument == "--color" || strings.HasPrefix(argument, "--color="):
+			value, next, err := namedOptionValue(args, index, "--color", "auto, always, or never")
+			if err != nil {
+				return runOptions{}, err
+			}
+			if options.colorSet {
+				return runOptions{}, errors.New("run accepts --color only once")
+			}
+			switch colorMode(value) {
+			case colorAuto, colorAlways, colorNever:
+				options.color = colorMode(value)
+			default:
+				return runOptions{}, fmt.Errorf("--color must be auto, always, or never, got %q", value)
+			}
+			options.colorSet = true
+			index = next
 		case argument == "--format" || strings.HasPrefix(argument, "--format="):
 			value, next, err := formatOptionValue(args, index)
 			if err != nil {
@@ -264,7 +309,32 @@ func runOptionsFromArgs(args []string) (runOptions, error) {
 	if options.scenarioPath == "" {
 		return runOptions{}, errors.New("run needs a scenario file")
 	}
+	if options.format == outputJSON {
+		switch {
+		case options.verbose && options.colorSet:
+			return runOptions{}, errors.New("--verbose and --color only apply to text reports")
+		case options.verbose:
+			return runOptions{}, errors.New("--verbose only applies to text reports")
+		case options.colorSet:
+			return runOptions{}, errors.New("--color only applies to text reports")
+		}
+	}
 	return options, nil
+}
+
+func namedOptionValue(args []string, index int, name, choices string) (string, int, error) {
+	argument := args[index]
+	if argument == name {
+		if index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") {
+			return "", index, fmt.Errorf("%s needs %s", name, choices)
+		}
+		return args[index+1], index + 1, nil
+	}
+	value := strings.TrimPrefix(argument, name+"=")
+	if value == "" {
+		return "", index, fmt.Errorf("%s needs %s", name, choices)
+	}
+	return value, index, nil
 }
 
 func formatOptionValue(args []string, index int) (string, int, error) {
@@ -365,32 +435,26 @@ func loadScenario(path string) (scenario.Definition, error) {
 	return definition, nil
 }
 
-func writeStart(writer io.Writer, definition scenario.Definition) error {
-	if _, err := fmt.Fprintf(
-		writer,
-		"Scenario: %q\nTarget: %s\nWarning: this command sends concurrent requests and may modify target state.\n\n",
-		definition.Name,
-		definition.Target,
-	); err != nil {
-		return err
-	}
-	if definition.Reduce {
-		_, err := fmt.Fprintf(
-			writer,
-			"Reduction: enabled; up to %d smaller configurations may be tested.\n\n",
-			reduction.MaxCandidates,
-		)
-		return err
-	}
-	return nil
-}
-
 func writeUsage(writer io.Writer) error {
 	_, err := io.WriteString(
 		writer,
-		"Usage:\n  concurtest run [--attempts N] [--concurrency N] [--no-reduce] [--format text|json] <scenario.yaml>\n\nRuns one adversarial scenario against its configured target. Text output is used unless --format json is selected.\n",
+		"Usage:\n  concurtest run [--attempts N] [--concurrency N] [--no-reduce] [--format text|json] [--verbose] [--color auto|always|never] <scenario.yaml>\n\nRuns one adversarial scenario against its configured target. Text output is the default. Use --verbose for all retained text evidence, or --format json for structured automation output.\n",
 	)
 	return err
+}
+
+func shouldUseColor(mode colorMode, writer io.Writer) bool {
+	switch mode {
+	case colorAlways:
+		return true
+	case colorNever:
+		return false
+	}
+	if value, exists := os.LookupEnv("NO_COLOR"); exists && value != "" {
+		return false
+	}
+	file, ok := writer.(interface{ Fd() uintptr })
+	return ok && term.IsTerminal(int(file.Fd()))
 }
 
 func writeDiagnostic(writer io.Writer, format string, arguments ...any) {
