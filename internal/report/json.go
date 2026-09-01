@@ -76,10 +76,10 @@ type scenarioJSON struct {
 }
 
 type jsonIntegerMinimumDefinitionJSON struct {
-	Type    string `json:"type"`
-	Name    string `json:"name"`
-	Field   string `json:"field"`
-	Minimum int64  `json:"minimum"`
+	Type    string   `json:"type"`
+	Name    string   `json:"name"`
+	Path    []string `json:"path"`
+	Minimum int64    `json:"minimum"`
 }
 
 type maximumSuccessfulAttemptsDefinitionJSON struct {
@@ -400,7 +400,7 @@ func invariantDefinition(invariant engine.Invariant) any {
 	if definition := invariant.JSONIntegerMinimum; definition != nil {
 		return jsonIntegerMinimumDefinitionJSON{
 			Type: "json_integer_minimum", Name: definition.Name,
-			Field: definition.Field, Minimum: definition.Minimum,
+			Path: append([]string{}, definition.Path...), Minimum: definition.Minimum,
 		}
 	}
 	if definition := invariant.MaximumSuccessfulAttempts; definition != nil {

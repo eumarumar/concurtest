@@ -16,11 +16,11 @@ type Invariant struct {
 	MaximumSuccessfulAttempts *MaximumSuccessfulAttemptsInvariant
 }
 
-// JSONIntegerMinimumInvariant requires one top-level JSON integer field to be
-// greater than or equal to Minimum.
+// JSONIntegerMinimumInvariant requires the JSON integer at one object path to
+// be greater than or equal to Minimum.
 type JSONIntegerMinimumInvariant struct {
 	Name    string
-	Field   string
+	Path    []string
 	Minimum int64
 }
 
@@ -83,25 +83,49 @@ func EvaluateJSONIntegerMinimum(
 		return JSONIntegerMinimumEvaluation{}, fmt.Errorf("decode trailing observation data: %w", err)
 	}
 
-	rawValue, ok := object[invariant.Field]
-	if !ok {
-		return JSONIntegerMinimumEvaluation{}, fmt.Errorf("observation field %q is missing", invariant.Field)
+	path := formatJSONPath(invariant.Path)
+	var rawValue json.RawMessage
+	for index, segment := range invariant.Path {
+		var ok bool
+		rawValue, ok = object[segment]
+		if !ok {
+			return JSONIntegerMinimumEvaluation{}, fmt.Errorf("observation path %s is missing", formatJSONPath(invariant.Path[:index+1]))
+		}
+		if index == len(invariant.Path)-1 {
+			break
+		}
+
+		var nested map[string]json.RawMessage
+		if err := json.Unmarshal(rawValue, &nested); err != nil {
+			return JSONIntegerMinimumEvaluation{}, fmt.Errorf(
+				"observation path %s must contain a JSON object: %w",
+				formatJSONPath(invariant.Path[:index+1]),
+				err,
+			)
+		}
+		if nested == nil {
+			return JSONIntegerMinimumEvaluation{}, fmt.Errorf(
+				"observation path %s must contain a JSON object, not null",
+				formatJSONPath(invariant.Path[:index+1]),
+			)
+		}
+		object = nested
 	}
 
 	var observed *int64
 	if err := json.Unmarshal(rawValue, &observed); err != nil {
 		return JSONIntegerMinimumEvaluation{}, fmt.Errorf(
-			"observation field %q must be a JSON integer representable as int64: %w",
-			invariant.Field,
+			"observation path %s must contain a JSON integer representable as int64: %w",
+			path,
 			err,
 		)
 	}
 	if observed == nil {
-		return JSONIntegerMinimumEvaluation{}, fmt.Errorf("observation field %q must not be null", invariant.Field)
+		return JSONIntegerMinimumEvaluation{}, fmt.Errorf("observation path %s must contain an integer, not null", path)
 	}
 
 	return JSONIntegerMinimumEvaluation{
-		Invariant: invariant,
+		Invariant: cloneJSONIntegerMinimumInvariant(invariant),
 		Observed:  *observed,
 		Violated:  *observed < invariant.Minimum,
 	}, nil
@@ -142,8 +166,13 @@ func validateJSONIntegerMinimumInvariant(invariant JSONIntegerMinimumInvariant) 
 	if strings.TrimSpace(invariant.Name) == "" {
 		return errors.New("evaluate JSON integer minimum invariant: empty name")
 	}
-	if strings.TrimSpace(invariant.Field) == "" {
-		return errors.New("evaluate JSON integer minimum invariant: empty field")
+	if len(invariant.Path) == 0 {
+		return errors.New("evaluate JSON integer minimum invariant: empty path")
+	}
+	for index, segment := range invariant.Path {
+		if strings.TrimSpace(segment) == "" {
+			return fmt.Errorf("evaluate JSON integer minimum invariant: empty path segment %d", index+1)
+		}
 	}
 	return nil
 }
@@ -217,4 +246,18 @@ func cloneMaximumSuccessfulAttemptsInvariant(
 ) MaximumSuccessfulAttemptsInvariant {
 	invariant.SuccessfulStatusCodes = append([]int(nil), invariant.SuccessfulStatusCodes...)
 	return invariant
+}
+
+func cloneJSONIntegerMinimumInvariant(invariant JSONIntegerMinimumInvariant) JSONIntegerMinimumInvariant {
+	invariant.Path = append([]string(nil), invariant.Path...)
+	return invariant
+}
+
+func formatJSONPath(path []string) string {
+	var formatted strings.Builder
+	formatted.WriteByte('$')
+	for _, segment := range path {
+		fmt.Fprintf(&formatted, "[%q]", segment)
+	}
+	return formatted.String()
 }

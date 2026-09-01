@@ -63,7 +63,7 @@ func TestRunExecutesSetupOperationsObservationAndFindsViolation(t *testing.T) {
 		Invariant: engine.Invariant{
 			JSONIntegerMinimum: &engine.JSONIntegerMinimumInvariant{
 				Name:    "stock must be non-negative",
-				Field:   "stock",
+				Path:    []string{"stock"},
 				Minimum: 0,
 			},
 		},
@@ -610,7 +610,7 @@ func scenarioWithoutSetup() engine.Scenario {
 		Invariant: engine.Invariant{
 			JSONIntegerMinimum: &engine.JSONIntegerMinimumInvariant{
 				Name:    "stock must be non-negative",
-				Field:   "stock",
+				Path:    []string{"stock"},
 				Minimum: 0,
 			},
 		},

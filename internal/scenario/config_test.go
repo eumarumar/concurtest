@@ -82,7 +82,7 @@ func TestDecodeValidScenario(t *testing.T) {
 	jsonInvariant := definition.Scenario.Invariant.JSONIntegerMinimum
 	if jsonInvariant == nil ||
 		jsonInvariant.Name != "final stock must be non-negative" ||
-		jsonInvariant.Field != "stock" ||
+		fmt.Sprint(jsonInvariant.Path) != "[stock]" ||
 		jsonInvariant.Minimum != 0 {
 		t.Errorf("invariant = %#v", definition.Scenario.Invariant)
 	}
@@ -114,7 +114,7 @@ func TestDecodeProducesRunnableScenario(t *testing.T) {
 			writer.WriteHeader(http.StatusCreated)
 		case "/state":
 			writer.Header().Set("Content-Type", "application/json")
-			if _, err := fmt.Fprintf(writer, `{"stock":%d}`, stock.Load()); err != nil {
+			if _, err := fmt.Fprintf(writer, `{"data":{"stock":%d}}`, stock.Load()); err != nil {
 				t.Errorf("write state response: %v", err)
 			}
 		default:
@@ -207,7 +207,7 @@ func TestDecodeRejectsInvalidMaximumSuccessfulAttemptsInvariant(t *testing.T) {
 		{name: "fractional status", document: strings.Replace(valid, "  maximum_successful_attempts: 1\n", "  maximum_successful_attempts: 1\n  successful_status_codes: [201.0]\n", 1)},
 		{name: "string status", document: strings.Replace(valid, "  maximum_successful_attempts: 1\n", "  maximum_successful_attempts: 1\n  successful_status_codes: ['201']\n", 1)},
 		{name: "status without maximum", document: strings.Replace(valid, "  maximum_successful_attempts: 1\n", "  successful_status_codes: [201]\n", 1)},
-		{name: "mixed invariant definitions", document: strings.Replace(valid, "  maximum_successful_attempts: 1\n", "  maximum_successful_attempts: 1\n  json_integer_field: stock\n  minimum: 0\n", 1)},
+		{name: "mixed invariant definitions", document: strings.Replace(valid, "  maximum_successful_attempts: 1\n", "  maximum_successful_attempts: 1\n  json_integer_path: [stock]\n  minimum: 0\n", 1)},
 		{name: "missing invariant definition", document: strings.Replace(valid, "  maximum_successful_attempts: 1\n", "", 1)},
 		{name: "state invariant without observation", document: strings.Replace(validYAML("http://example.test"), "observation:\n  method: GET\n  path: /state\n\n", "", 1)},
 	}
@@ -276,7 +276,12 @@ func TestDecodeRejectsInvalidScenario(t *testing.T) {
 		{name: "reduce requires two attempts", document: strings.NewReplacer("attempts: 2", "attempts: 1", "concurrency: 2", "concurrency: 1").Replace(reducible)},
 		{name: "reduce requires concurrency two", document: strings.Replace(reducible, "concurrency: 2", "concurrency: 1", 1)},
 		{name: "empty invariant name", document: strings.Replace(valid, "name: final stock must be non-negative", "name: ' '", 1)},
-		{name: "empty invariant field", document: strings.Replace(valid, "json_integer_field: stock", "json_integer_field: ' '", 1)},
+		{name: "empty invariant path", document: strings.Replace(valid, "json_integer_path: [data, stock]", "json_integer_path: []", 1)},
+		{name: "null invariant path", document: strings.Replace(valid, "json_integer_path: [data, stock]", "json_integer_path: null", 1)},
+		{name: "scalar invariant path", document: strings.Replace(valid, "json_integer_path: [data, stock]", "json_integer_path: stock", 1)},
+		{name: "non-string invariant path entry", document: strings.Replace(valid, "json_integer_path: [data, stock]", "json_integer_path: [data, 1]", 1)},
+		{name: "empty invariant path entry", document: strings.Replace(valid, "json_integer_path: [data, stock]", "json_integer_path: [data, ' ']", 1)},
+		{name: "old invariant field", document: strings.Replace(valid, "json_integer_path: [data, stock]", "json_integer_field: stock", 1)},
 		{name: "missing minimum", document: strings.Replace(valid, "  minimum: 0\n", "", 1)},
 		{name: "fractional minimum", document: strings.Replace(valid, "minimum: 0", "minimum: 0.5", 1)},
 	}
@@ -324,7 +329,7 @@ observation:
 
 invariant:
   name: final stock must be non-negative
-  json_integer_field: stock
+  json_integer_path: [data, stock]
   minimum: 0
 `, target)
 }

@@ -30,6 +30,9 @@ func TestWriteJSONProducesSchemaValidCompleteSafeEvidence(t *testing.T) {
 	input.ConfiguredTrials = 1
 	input.Scenario.Operation.Request.Body = []byte("request-body-secret")
 	input.Result.Trials[0].Run.History.Attempts[0].Execution.Request.Body = []byte("request-body-secret")
+	path := []string{"data", "quantity"}
+	input.Scenario.Invariant.JSONIntegerMinimum.Path = path
+	input.Result.Trials[0].Run.Evaluation.JSONIntegerMinimum.Invariant.Path = append([]string(nil), path...)
 
 	var output bytes.Buffer
 	if err := report.WriteJSON(&output, input); err != nil {
@@ -50,6 +53,13 @@ func TestWriteJSONProducesSchemaValidCompleteSafeEvidence(t *testing.T) {
 	decodeJSON(t, output.Bytes(), &document)
 	if document["schema_version"] != report.JSONSchemaVersion || document["report_type"] != "run" {
 		t.Fatalf("report identity = %v/%v", document["schema_version"], document["report_type"])
+	}
+	invariant := document["scenario"].(map[string]any)["invariant"].(map[string]any)
+	if strings.Join(anyStrings(invariant["path"].([]any)), ".") != "data.quantity" {
+		t.Fatalf("scenario invariant path = %#v", invariant["path"])
+	}
+	if _, exists := invariant["field"]; exists {
+		t.Fatalf("scenario invariant retained removed field: %#v", invariant)
 	}
 	trials := document["trials"].([]any)
 	if len(trials) != 1 {

@@ -416,7 +416,7 @@ func reductionScenario(attempts, concurrency int) engine.Scenario {
 		Invariant: engine.Invariant{
 			JSONIntegerMinimum: &engine.JSONIntegerMinimumInvariant{
 				Name:    "stock must be non-negative",
-				Field:   "stock",
+				Path:    []string{"stock"},
 				Minimum: 0,
 			},
 		},

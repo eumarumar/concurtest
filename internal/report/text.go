@@ -575,13 +575,14 @@ func writeInvariantLines(writer io.Writer, invariant engine.Invariant, evaluatio
 	switch {
 	case invariant.JSONIntegerMinimum != nil:
 		definition := invariant.JSONIntegerMinimum
+		path := formatJSONPath(definition.Path)
 		fmt.Fprintf(writer, "%s%s\n", indent, definition.Name)
-		fmt.Fprintf(writer, "%sExpected        %s >= %d\n", indent, definition.Field, definition.Minimum)
+		fmt.Fprintf(writer, "%sExpected        %s >= %d\n", indent, path, definition.Minimum)
 		if evaluation == nil || evaluation.JSONIntegerMinimum == nil {
 			fmt.Fprintf(writer, "%sObserved        Not evaluated\n", indent)
 			return
 		}
-		fmt.Fprintf(writer, "%sObserved        %s = %d\n", indent, definition.Field, evaluation.JSONIntegerMinimum.Observed)
+		fmt.Fprintf(writer, "%sObserved        %s = %d\n", indent, path, evaluation.JSONIntegerMinimum.Observed)
 	case invariant.MaximumSuccessfulAttempts != nil:
 		definition := invariant.MaximumSuccessfulAttempts
 		fmt.Fprintf(writer, "%s%s\n", indent, definition.Name)
@@ -764,12 +765,21 @@ func appendInvariantKey(key *strings.Builder, evaluation *engine.InvariantEvalua
 	fmt.Fprintf(key, "violated=%t;", evaluation.Violated)
 	if evaluation.JSONIntegerMinimum != nil {
 		value := evaluation.JSONIntegerMinimum
-		fmt.Fprintf(key, "json=%q,%q,%d,%d,%t;", value.Invariant.Name, value.Invariant.Field, value.Invariant.Minimum, value.Observed, value.Violated)
+		fmt.Fprintf(key, "json=%q,%q,%d,%d,%t;", value.Invariant.Name, formatJSONPath(value.Invariant.Path), value.Invariant.Minimum, value.Observed, value.Violated)
 	}
 	if evaluation.MaximumSuccessfulAttempts != nil {
 		value := evaluation.MaximumSuccessfulAttempts
 		fmt.Fprintf(key, "history=%q,%d,%v,%v,%v,%t;", value.Invariant.Name, value.Invariant.Maximum, value.Invariant.SuccessfulStatusCodes, value.SuccessfulAttemptIDs, value.OverLimitAttemptIDs, value.Violated)
 	}
+}
+
+func formatJSONPath(path []string) string {
+	var formatted strings.Builder
+	formatted.WriteByte('$')
+	for _, segment := range path {
+		fmt.Fprintf(&formatted, "[%q]", segment)
+	}
+	return formatted.String()
 }
 
 func appendExecutionKey(key *strings.Builder, label string, execution *engine.HTTPExecution) {

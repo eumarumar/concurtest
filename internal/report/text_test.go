@@ -33,8 +33,8 @@ func TestWriteTextPresentsViolationEvidenceSafely(t *testing.T) {
 		"Attempts        2",
 		"Concurrency     2",
 		"final stock must be non-negative",
-		"Expected        stock >= 0",
-		"Observed        stock = -1",
+		"Expected        $[\"stock\"] >= 0",
+		"Observed        $[\"stock\"] = -1",
 		"Baseline evidence",
 		"Violation · Trial 1",
 		"POST /reset · HTTP 204 No Content",
@@ -89,6 +89,24 @@ func TestWriteTextPresentsHistoryInvariant(t *testing.T) {
 	)
 }
 
+func TestWriteTextPresentsNestedJSONPath(t *testing.T) {
+	t.Parallel()
+
+	input := completedTextInput(engine.RunOutcomePassed, 2)
+	path := []string{"data", "quantity"}
+	input.Scenario.Invariant.JSONIntegerMinimum.Path = path
+	input.Result.Trials[0].Run.Evaluation.JSONIntegerMinimum.Invariant.Path = append([]string(nil), path...)
+
+	var output bytes.Buffer
+	if err := report.WriteText(&output, input); err != nil {
+		t.Fatalf("WriteText() error = %v", err)
+	}
+	assertContains(t, output.String(),
+		"Expected        $[\"data\"][\"quantity\"] >= 0",
+		"Observed        $[\"data\"][\"quantity\"] = 2",
+	)
+}
+
 func TestWriteTextGroupsEquivalentViolationsButSurfacesMaterialDifferences(t *testing.T) {
 	t.Parallel()
 
@@ -122,7 +140,7 @@ func TestWriteTextGroupsEquivalentViolationsButSurfacesMaterialDifferences(t *te
 		"Violation · Trial 3",
 		"Violation · Trial 4",
 		"Trials 2 had the same violation evidence as Trial 1.",
-		"Observed        stock = -2",
+		"Observed        $[\"stock\"] = -2",
 		"HTTP 202 Accepted",
 	)
 }
@@ -376,7 +394,7 @@ func testScenario() engine.Scenario {
 		Operation: engine.Operation{Name: "purchase", Request: engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/purchase", Header: secretHeader}},
 		Attempts:  2, Concurrency: 2,
 		Observation: &engine.HTTPRequest{Method: http.MethodGet, URL: "http://example.test/state?detail=full", Header: secretHeader},
-		Invariant:   engine.Invariant{JSONIntegerMinimum: &engine.JSONIntegerMinimumInvariant{Name: "final stock must be non-negative", Field: "stock", Minimum: 0}},
+		Invariant:   engine.Invariant{JSONIntegerMinimum: &engine.JSONIntegerMinimumInvariant{Name: "final stock must be non-negative", Path: []string{"stock"}, Minimum: 0}},
 	}
 }
 

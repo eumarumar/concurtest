@@ -195,9 +195,9 @@ one seat cannot have multiple confirmed owners
 Invariant evaluation should be separate from transport execution.
 
 A scenario continues to declare exactly one invariant. The current concrete
-forms are a top-level JSON integer minimum and a maximum number of successful
-HTTP attempts. They are represented explicitly rather than through an
-expression language or plugin system.
+forms are a JSON integer minimum at a configured object path and a maximum
+number of successful HTTP attempts. They are represented explicitly rather
+than through an expression language or plugin system.
 
 ### Failure
 

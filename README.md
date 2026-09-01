@@ -7,9 +7,9 @@ framework used to build that application.
 
 The current v0 supports sequential reproducibility trials. A trial can reset
 the target, repeat one HTTP operation with bounded concurrency, and evaluate
-one invariant. An invariant can check a top-level JSON integer observed after
-the operations or limit how many operation responses have successful HTTP
-statuses. An opt-in reduction pass can test smaller concurrent execution
+one invariant. An invariant can check a JSON integer at a chosen object path
+after the operations or limit how many operation responses have successful
+HTTP statuses. An opt-in reduction pass can test smaller concurrent execution
 settings after a failure reproduces across a clean majority of trials.
 
 > [!WARNING]
@@ -40,6 +40,18 @@ In a second terminal, run the checked-in scenario:
 go run ./cmd/concurtest run examples/vulnerable-inventory/scenario.yaml
 ```
 
+The scenario selects the observed value with an explicit list of object keys:
+
+```yaml
+invariant:
+  name: final stock must be non-negative
+  json_integer_path: [stock]
+  minimum: 0
+```
+
+Nested responses use one entry for each object level, such as
+`json_integer_path: [data, quantity]`. Array traversal is not supported.
+
 The checked-in scenario starts with four attempts at concurrency four and runs
 10 independent trials. Each trial resets the inventory. After the failure
 reproduces, ConcurTest tests smaller settings and selects two attempts at
@@ -57,8 +69,8 @@ Execution
 
 Invariant
   final stock must be non-negative
-  Expected        stock >= 0
-  Observed        stock = -1
+  Expected        $["stock"] >= 0
+  Observed        $["stock"] = -1
 
 Reduction
   Status          REDUCED

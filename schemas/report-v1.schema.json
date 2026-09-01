@@ -48,11 +48,15 @@
     "json_integer_minimum_definition": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "name", "field", "minimum"],
+      "required": ["type", "name", "path", "minimum"],
       "properties": {
         "type": { "const": "json_integer_minimum" },
         "name": { "type": "string", "minLength": 1 },
-        "field": { "type": "string", "minLength": 1 },
+        "path": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
         "minimum": { "type": "integer" }
       }
     },

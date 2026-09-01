@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/eumarumar/concurtest/internal/engine"
@@ -14,48 +15,63 @@ func TestEvaluateJSONIntegerMinimum(t *testing.T) {
 
 	invariant := engine.JSONIntegerMinimumInvariant{
 		Name:    "stock must be non-negative",
-		Field:   "stock",
+		Path:    []string{"data", "quantity"},
 		Minimum: 0,
 	}
 	tests := []struct {
-		name     string
-		document string
-		observed int64
-		violated bool
-		wantErr  bool
+		name          string
+		path          []string
+		document      string
+		observed      int64
+		violated      bool
+		wantErr       bool
+		wantErrorText string
 	}{
-		{name: "above minimum", document: `{"stock":2}`, observed: 2},
-		{name: "equal to minimum", document: `{"stock":0}`, observed: 0},
-		{name: "below minimum", document: `{"stock":-1}`, observed: -1, violated: true},
-		{name: "malformed JSON", document: `{"stock":`, wantErr: true},
+		{name: "above minimum", document: `{"data":{"quantity":2}}`, observed: 2},
+		{name: "equal to minimum", document: `{"data":{"quantity":0}}`, observed: 0},
+		{name: "below minimum", document: `{"data":{"quantity":-1}}`, observed: -1, violated: true},
+		{name: "top-level path", path: []string{"stock"}, document: `{"stock":1}`, observed: 1},
+		{name: "literal dot in segment", path: []string{"data.quantity"}, document: `{"data.quantity":3}`, observed: 3},
+		{name: "malformed JSON", document: `{"data":`, wantErr: true},
 		{name: "top-level array", document: `[0]`, wantErr: true},
 		{name: "top-level null", document: `null`, wantErr: true},
-		{name: "missing field", document: `{"remaining":0}`, wantErr: true},
-		{name: "null field", document: `{"stock":null}`, wantErr: true},
-		{name: "string field", document: `{"stock":"0"}`, wantErr: true},
-		{name: "boolean field", document: `{"stock":true}`, wantErr: true},
-		{name: "object field", document: `{"stock":{}}`, wantErr: true},
-		{name: "array field", document: `{"stock":[0]}`, wantErr: true},
-		{name: "decimal field", document: `{"stock":1.0}`, wantErr: true},
-		{name: "overflowing field", document: `{"stock":9223372036854775808}`, wantErr: true},
-		{name: "trailing JSON value", document: `{"stock":0} {"stock":1}`, wantErr: true},
-		{name: "trailing invalid data", document: `{"stock":0} invalid`, wantErr: true},
+		{name: "missing first segment", document: `{"status":"success"}`, wantErr: true},
+		{name: "missing final segment", document: `{"data":{"remaining":0}}`, wantErr: true, wantErrorText: `observation path $["data"]["quantity"] is missing`},
+		{name: "null intermediate segment", document: `{"data":null}`, wantErr: true, wantErrorText: `observation path $["data"] must contain a JSON object, not null`},
+		{name: "string intermediate segment", document: `{"data":"value"}`, wantErr: true},
+		{name: "array intermediate segment", document: `{"data":[{"quantity":0}]}`, wantErr: true},
+		{name: "null value", document: `{"data":{"quantity":null}}`, wantErr: true, wantErrorText: `observation path $["data"]["quantity"] must contain an integer, not null`},
+		{name: "string value", document: `{"data":{"quantity":"0"}}`, wantErr: true, wantErrorText: `observation path $["data"]["quantity"] must contain a JSON integer`},
+		{name: "boolean value", document: `{"data":{"quantity":true}}`, wantErr: true},
+		{name: "object value", document: `{"data":{"quantity":{}}}`, wantErr: true},
+		{name: "array value", document: `{"data":{"quantity":[0]}}`, wantErr: true},
+		{name: "decimal value", document: `{"data":{"quantity":1.0}}`, wantErr: true},
+		{name: "overflowing value", document: `{"data":{"quantity":9223372036854775808}}`, wantErr: true},
+		{name: "trailing JSON value", document: `{"data":{"quantity":0}} {"data":{"quantity":1}}`, wantErr: true},
+		{name: "trailing invalid data", document: `{"data":{"quantity":0}} invalid`, wantErr: true},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			evaluation, err := engine.EvaluateJSONIntegerMinimum(invariant, []byte(test.document))
+			definition := invariant
+			if test.path != nil {
+				definition.Path = test.path
+			}
+			evaluation, err := engine.EvaluateJSONIntegerMinimum(definition, []byte(test.document))
 			if test.wantErr {
 				if err == nil {
 					t.Fatal("EvaluateJSONIntegerMinimum() error = nil, want error")
+				}
+				if test.wantErrorText != "" && !strings.Contains(err.Error(), test.wantErrorText) {
+					t.Errorf("EvaluateJSONIntegerMinimum() error = %q, want text %q", err, test.wantErrorText)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("EvaluateJSONIntegerMinimum() error = %v", err)
 			}
-			if evaluation.Invariant != invariant {
-				t.Errorf("evaluation invariant = %#v, want %#v", evaluation.Invariant, invariant)
+			if !reflect.DeepEqual(evaluation.Invariant, definition) {
+				t.Errorf("evaluation invariant = %#v, want %#v", evaluation.Invariant, definition)
 			}
 			if evaluation.Observed != test.observed {
 				t.Errorf("observed = %d, want %d", evaluation.Observed, test.observed)
@@ -64,6 +80,22 @@ func TestEvaluateJSONIntegerMinimum(t *testing.T) {
 				t.Errorf("violated = %t, want %t", evaluation.Violated, test.violated)
 			}
 		})
+	}
+}
+
+func TestEvaluateJSONIntegerMinimumCopiesInvariantPath(t *testing.T) {
+	t.Parallel()
+
+	invariant := engine.JSONIntegerMinimumInvariant{
+		Name: "quantity must be non-negative", Path: []string{"data", "quantity"}, Minimum: 0,
+	}
+	evaluation, err := engine.EvaluateJSONIntegerMinimum(invariant, []byte(`{"data":{"quantity":1}}`))
+	if err != nil {
+		t.Fatalf("EvaluateJSONIntegerMinimum() error = %v", err)
+	}
+	invariant.Path[0] = "changed"
+	if evaluation.Invariant.Path[0] != "data" {
+		t.Errorf("evaluation path changed to %q", evaluation.Invariant.Path[0])
 	}
 }
 
@@ -164,10 +196,12 @@ func TestEvaluateJSONIntegerMinimumRejectsInvalidDefinition(t *testing.T) {
 	t.Parallel()
 
 	tests := []engine.JSONIntegerMinimumInvariant{
-		{Field: "stock"},
+		{Path: []string{"stock"}},
 		{Name: "stock must be non-negative"},
-		{Name: " ", Field: "stock"},
-		{Name: "stock must be non-negative", Field: " "},
+		{Name: " ", Path: []string{"stock"}},
+		{Name: "stock must be non-negative", Path: []string{}},
+		{Name: "stock must be non-negative", Path: []string{" "}},
+		{Name: "stock must be non-negative", Path: []string{"data", ""}},
 	}
 
 	for _, invariant := range tests {

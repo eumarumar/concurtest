@@ -278,8 +278,8 @@ func TestRunReportsViolationAndPrintsTargetBeforeRequests(t *testing.T) {
 		"Completed       1",
 		"1 of 1 completed trials demonstrated the violation",
 		"First violation Trial 1",
-		"Expected        stock >= 0",
-		"Observed        stock = -1",
+		"Expected        $[\"stock\"] >= 0",
+		"Observed        $[\"stock\"] = -1",
 		"Attempt #1",
 		"Attempt #2",
 		"HTTP 201 Created",
@@ -691,7 +691,7 @@ observation:
 
 invariant:
   name: final stock must be non-negative
-  json_integer_field: stock
+  json_integer_path: [stock]
   minimum: 0
 `, target, timeout, setup, attempts, concurrency)
 }
