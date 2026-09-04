@@ -61,7 +61,16 @@ concurrency two:
 ConcurTest · inventory oversell
 
 VIOLATED
-10 of 10 completed trials demonstrated the violation.
+10/10 trials demonstrated the violation.
+
+Trials
+  Requested       10
+  Completed       10
+  Passed          0
+  Violated        10
+  Inconclusive    0
+  Errored         0
+  First violation Trial 1
 
 Execution
   Attempts        4
@@ -74,10 +83,24 @@ Invariant
 
 Reduction
   Status          REDUCED
-  Smallest observed failure
-    Attempts      2
-    Concurrency   2
-    Violations    10 of 10 trials
+  Attempts        2
+  Concurrency     2
+  Violations      10/10 trials
+  Note            Smallest observed failure; a smaller one may still exist.
+
+Evidence
+  Smallest observed failure · Trial 1
+    Attempt #1     POST /purchase · HTTP 201 Created
+      Response        "{\"accepted\":true}"
+    Attempt #2     POST /purchase · HTTP 201 Created
+      Response        "{\"accepted\":true}"
+    Observation    GET /state · HTTP 200 OK
+      Response        "{\"stock\":-1}"
+
+Reproduce
+  concurtest run --attempts 2 --concurrency 2 --no-reduce examples/vulnerable-inventory/scenario.yaml
+
+Run with --verbose for all trial evidence.
 ```
 
 The command exits with code `1`. That non-zero result is expected in this
@@ -91,10 +114,11 @@ command uses execution overrides and disables another reduction pass:
 concurtest run --attempts 2 --concurrency 2 --no-reduce examples/vulnerable-inventory/scenario.yaml
 ```
 
-The default text report expands the first representative of every distinct
-violation and always shows errored or inconclusive trials. Equivalent failures
-are summarized by trial number. Use `--verbose` to expand every retained trial,
-including passing trials and retained reduction evidence:
+The default text report shows one smallest observed failure, at most four
+relevant attempts, and one example of each problem status. Response excerpts
+are limited to 160 bytes. Use `--verbose` to expand every retained trial,
+including passing trials and retained reduction evidence; verbose excerpts
+retain up to 512 bytes:
 
 ```bash
 go run ./cmd/concurtest run --verbose examples/vulnerable-inventory/scenario.yaml

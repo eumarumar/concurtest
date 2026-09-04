@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -26,7 +27,7 @@ func TestWriteTextPresentsViolationEvidenceSafely(t *testing.T) {
 	text := output.String()
 	assertContains(t, text,
 		"VIOLATED",
-		"1 of 1 completed trials demonstrated the violation.",
+		"1/1 trials demonstrated the violation.",
 		"Requested       1",
 		"Completed       1",
 		"First violation Trial 1",
@@ -35,16 +36,19 @@ func TestWriteTextPresentsViolationEvidenceSafely(t *testing.T) {
 		"final stock must be non-negative",
 		"Expected        $[\"stock\"] >= 0",
 		"Observed        $[\"stock\"] = -1",
-		"Baseline evidence",
-		"Violation · Trial 1",
-		"POST /reset · HTTP 204 No Content",
+		"Evidence",
+		"Baseline failure · Trial 1",
 		"Attempt #1     POST /purchase · HTTP 201 Created",
 		"Attempt #2     POST /purchase · HTTP 409 Conflict",
 		`Response        "{\"accepted\":true}"`,
 		"GET /state?detail=full · HTTP 200 OK",
 		`Response        "{\"stock\":-1}"`,
 		"Reproduce\n  concurtest run scenarios/inventory.yaml",
+		"Run with --verbose for all trial evidence.",
 	)
+	if strings.Contains(text, "POST /reset") {
+		t.Fatalf("compact evidence included setup details:\n%s", text)
+	}
 	if first, second := strings.Index(text, "Attempt #1"), strings.Index(text, "Attempt #2"); first < 0 || first >= second {
 		t.Fatalf("attempt order is not stable:\n%s", text)
 	}
@@ -64,9 +68,21 @@ func TestWriteTextPresentsHistoryInvariant(t *testing.T) {
 	}
 	input.Scenario.Invariant = engine.Invariant{MaximumSuccessfulAttempts: &definition}
 	input.Scenario.Observation = nil
+	input.Scenario.Attempts = 3
 	trial := &input.Result.Trials[0]
 	trial.Run.Observation = nil
 	trial.Run.History.Attempts[1].Execution.Response.StatusCode = http.StatusAccepted
+	trial.Run.History.Attempts = append(trial.Run.History.Attempts, engine.Attempt{
+		ID:            3,
+		OperationName: "purchase",
+		Execution: successfulExecution(
+			&input.Scenario.Operation.Request,
+			trial.Run.History.CompletedAt.Add(-time.Millisecond),
+			time.Millisecond,
+			http.StatusConflict,
+			[]byte("out of stock"),
+		),
+	})
 	trial.Run.Evaluation = &engine.InvariantEvaluation{
 		MaximumSuccessfulAttempts: &engine.MaximumSuccessfulAttemptsEvaluation{
 			Invariant: definition, SuccessfulAttemptIDs: []int{1, 2}, OverLimitAttemptIDs: []int{2}, Violated: true,
@@ -85,8 +101,15 @@ func TestWriteTextPresentsHistoryInvariant(t *testing.T) {
 		"Observed        2 successful attempts",
 		"Successful       #1, #2",
 		"Beyond maximum   #2",
-		"Observation\n    Not configured.",
+		"Evidence\n  Baseline failure · Trial 1",
+		"Run with --verbose for all trial evidence.",
 	)
+	if strings.Contains(output.String(), "Observation") {
+		t.Fatalf("compact history evidence included an unused observation:\n%s", output.String())
+	}
+	if strings.Contains(output.String(), "Attempt #3") {
+		t.Fatalf("compact history evidence included an attempt unrelated to the violation:\n%s", output.String())
+	}
 }
 
 func TestWriteTextPresentsNestedJSONPath(t *testing.T) {
@@ -107,7 +130,7 @@ func TestWriteTextPresentsNestedJSONPath(t *testing.T) {
 	)
 }
 
-func TestWriteTextGroupsEquivalentViolationsButSurfacesMaterialDifferences(t *testing.T) {
+func TestWriteTextCompactShowsOneViolationDespiteDistinctEvidence(t *testing.T) {
 	t.Parallel()
 
 	base := completedTextInput(engine.RunOutcomeViolated, -1)
@@ -132,17 +155,16 @@ func TestWriteTextGroupsEquivalentViolationsButSurfacesMaterialDifferences(t *te
 		t.Fatalf("WriteText() error = %v", err)
 	}
 	text := output.String()
-	if count := strings.Count(text, "Violation · Trial"); count != 3 {
-		t.Fatalf("violation details = %d, want 3 distinct representatives\n%s", count, text)
+	if count := strings.Count(text, "Baseline failure · Trial"); count != 1 {
+		t.Fatalf("compact violation evidence = %d blocks, want 1\n%s", count, text)
 	}
 	assertContains(t, text,
-		"Violation · Trial 1",
-		"Violation · Trial 3",
-		"Violation · Trial 4",
-		"Trials 2 had the same violation evidence as Trial 1.",
-		"Observed        $[\"stock\"] = -2",
-		"HTTP 202 Accepted",
+		"Baseline failure · Trial 1",
+		"Run with --verbose for all trial evidence.",
 	)
+	if strings.Contains(text, "Trial 3") || strings.Contains(text, "HTTP 202 Accepted") {
+		t.Fatalf("compact report expanded later distinct violations:\n%s", text)
+	}
 }
 
 func TestWriteTextAlwaysSurfacesExecutionProblems(t *testing.T) {
@@ -158,8 +180,12 @@ func TestWriteTextAlwaysSurfacesExecutionProblems(t *testing.T) {
 		Run: engine.RunResult{StartedAt: time.Unix(1_700_000_001, 0), CompletedAt: time.Unix(1_700_000_001, int64(time.Millisecond))},
 		Err: errors.New("setup unavailable"),
 	}
-	input.Result.Requested = 3
-	input.Result.Trials = []engine.TrialResult{violated, inconclusive, errored}
+	secondInconclusive := inconclusive
+	secondInconclusive.Number = 4
+	secondErrored := errored
+	secondErrored.Number = 5
+	input.Result.Requested = 5
+	input.Result.Trials = []engine.TrialResult{violated, inconclusive, errored, secondInconclusive, secondErrored}
 
 	var output bytes.Buffer
 	if err := report.WriteText(&output, input); err != nil {
@@ -167,15 +193,60 @@ func TestWriteTextAlwaysSurfacesExecutionProblems(t *testing.T) {
 	}
 	text := output.String()
 	assertContains(t, text,
-		"Trial 2 · INCONCLUSIVE",
-		"1 of 2 attempts failed or did not start",
+		"Problem · Baseline · Trial 3 · ERRORED",
+		`"setup unavailable"`,
+		"Problem · Baseline · Trial 2 · INCONCLUSIVE",
+		"1/2 attempts failed or did not start",
 		`Error           "send request: network unavailable"`,
-		"Trial 3 · ERRORED",
-		`Problem         "setup unavailable"`,
-		"Observation\n    Not reached.",
+		"1 more errored trial not shown.",
+		"1 more inconclusive trial not shown.",
 	)
-	if strings.Index(text, "Violation · Trial 1") >= strings.Index(text, "Trial 2 · INCONCLUSIVE") || strings.Index(text, "Trial 2 · INCONCLUSIVE") >= strings.Index(text, "Trial 3 · ERRORED") {
-		t.Fatalf("problem evidence is not in trial order:\n%s", text)
+	if strings.Count(text, "Problem · Baseline") != 2 {
+		t.Fatalf("compact report did not show one example per problem status:\n%s", text)
+	}
+}
+
+func TestWriteTextCompactPrefersInterruptedCandidateProblems(t *testing.T) {
+	t.Parallel()
+
+	input := completedTextInput(engine.RunOutcomeViolated, -1)
+	baselineProblem := engine.TrialResult{
+		Number: 2,
+		Status: engine.TrialStatusErrored,
+		Err:    errors.New("baseline unavailable"),
+	}
+	input.Result.Requested = 2
+	input.Result.Trials = append(input.Result.Trials, baselineProblem)
+	input.RunError = errors.New("reduction interrupted")
+	interruptedProblem := engine.TrialResult{
+		Number: 1,
+		Status: engine.TrialStatusErrored,
+		Err:    errors.New("candidate unavailable"),
+	}
+	interruptedTrials := engine.TrialsResult{
+		Requested: 1,
+		Trials:    []engine.TrialResult{interruptedProblem},
+	}
+	input.Reduction = &reduction.Result{
+		Baseline: input.Result,
+		Candidates: []reduction.CandidateResult{{
+			Candidate: reduction.Candidate{Attempts: 2, Concurrency: 2},
+			Trials:    &interruptedTrials,
+		}},
+	}
+
+	var output bytes.Buffer
+	if err := report.WriteText(&output, input); err != nil {
+		t.Fatal(err)
+	}
+	text := output.String()
+	assertContains(t, text,
+		"Problem · Interrupted candidate · Trial 1 · ERRORED",
+		`"candidate unavailable"`,
+		"1 more errored trial not shown.",
+	)
+	if strings.Contains(text, "Problem · Baseline · Trial 2") {
+		t.Fatalf("compact report preferred the baseline problem over the interrupted candidate:\n%s", text)
 	}
 }
 
@@ -202,7 +273,7 @@ func TestWriteTextVerboseExpandsEveryRetainedTrial(t *testing.T) {
 		t.Fatalf("compact report expanded a passing trial:\n%s", compact.String())
 	}
 	assertContains(t, verbose.String(), "Violation · Trial 1", "Violation · Trial 2", "Trial 3 · PASSED")
-	if strings.Contains(verbose.String(), "Use --verbose") || strings.Contains(verbose.String(), "same violation evidence") {
+	if strings.Contains(verbose.String(), "Run with --verbose") {
 		t.Fatalf("verbose report retained compact summaries:\n%s", verbose.String())
 	}
 }
@@ -228,18 +299,22 @@ func TestWriteTextColorIsOptionalAndDoesNotColorCommands(t *testing.T) {
 	}
 }
 
-func TestWriteTextReductionKeepsBaselineFirstAndAvoidsDuplicateEvidence(t *testing.T) {
+func TestWriteTextCompactPrefersSelectedReductionEvidence(t *testing.T) {
 	t.Parallel()
 
 	input := completedTextInput(engine.RunOutcomeViolated, -1)
 	input.Scenario.Attempts = 4
 	input.Scenario.Concurrency = 4
+	input.Result.Requested = 10
+	input.Result.Trials = distinctViolationTrials(10, "baseline")
 	selected := completedTextInput(engine.RunOutcomeViolated, -1).Result
+	selected.Requested = 10
+	selected.Trials = distinctViolationTrials(10, "selected")
 	input.Reduction = &reduction.Result{
 		StartedAt: input.Result.StartedAt, CompletedAt: input.Result.CompletedAt.Add(time.Second), Baseline: input.Result,
 		Candidates: []reduction.CandidateResult{{
 			Candidate: reduction.Candidate{Attempts: 2, Concurrency: 2},
-			Summary:   reduction.TrialSummary{Requested: 1, Completed: 1, Violated: 1},
+			Summary:   reduction.TrialSummary{Requested: 10, Completed: 10, Violated: 10},
 			Accepted:  true, Trials: &selected,
 		}},
 		Selected: reduction.Candidate{Attempts: 2, Concurrency: 2}, SelectedTrials: &selected, Status: reduction.StatusReduced,
@@ -251,16 +326,20 @@ func TestWriteTextReductionKeepsBaselineFirstAndAvoidsDuplicateEvidence(t *testi
 	}
 	text := compact.String()
 	assertContains(t, text,
-		"Baseline evidence",
 		"Reduction\n  Status          REDUCED",
-		"Smallest observed failure",
-		"Attempts      2",
-		"Concurrency   2",
-		"Selected candidate violations matched the baseline evidence.",
+		"Attempts        2",
+		"Concurrency     2",
+		"Violations      10/10 trials",
+		"Note            Smallest observed failure; a smaller one may still exist.",
+		"Evidence\n  Smallest observed failure · Trial 1",
+		`Response        "{\"source\":\"selected-1\"}"`,
 		"concurtest run --attempts 2 --concurrency 2 --no-reduce scenarios/inventory.yaml",
 	)
-	if strings.Index(text, "Baseline evidence") >= strings.Index(text, "Reduction\n") {
-		t.Fatalf("baseline was not reported before reduction:\n%s", text)
+	if strings.Contains(text, "Baseline evidence") || strings.Index(text, "Reduction\n") >= strings.Index(text, "Evidence\n") {
+		t.Fatalf("compact evidence was not placed after reduction:\n%s", text)
+	}
+	if strings.Contains(text, "baseline-1") || strings.Contains(text, "selected-2") || strings.Count(text, "Smallest observed failure · Trial") != 1 {
+		t.Fatalf("compact report expanded more than the selected representative:\n%s", text)
 	}
 
 	var verbose bytes.Buffer
@@ -268,8 +347,33 @@ func TestWriteTextReductionKeepsBaselineFirstAndAvoidsDuplicateEvidence(t *testi
 		t.Fatal(err)
 	}
 	assertContains(t, verbose.String(), "Candidate results", "Selected candidate evidence")
-	if strings.Count(verbose.String(), "Violation · Trial 1") != 1 || strings.Count(verbose.String(), "Trial 1 · VIOLATED") != 1 {
+	if strings.Count(verbose.String(), "Violation · Trial") != 10 || strings.Count(verbose.String(), "· VIOLATED") != 10 {
 		t.Fatalf("verbose report did not retain baseline and selected evidence:\n%s", verbose.String())
+	}
+}
+
+func TestWriteTextCompactBoundsAttemptsAndResponseBodies(t *testing.T) {
+	t.Parallel()
+
+	input := completedTextInput(engine.RunOutcomeViolated, -1)
+	input.Scenario.Attempts = 6
+	template := input.Result.Trials[0].Run.History.Attempts[0]
+	attempts := make([]engine.Attempt, 6)
+	for index := range attempts {
+		attempts[index] = template
+		attempts[index].ID = index + 1
+		attempts[index].Execution.Response.Body = []byte(strings.Repeat("x", 200))
+	}
+	input.Result.Trials[0].Run.History.Attempts = attempts
+
+	var output bytes.Buffer
+	if err := report.WriteText(&output, input); err != nil {
+		t.Fatal(err)
+	}
+	text := output.String()
+	assertContains(t, text, "Attempt #4", "2 more attempts not shown.", "[truncated]")
+	if strings.Contains(text, "Attempt #5") || strings.Contains(text, strings.Repeat("x", 161)) {
+		t.Fatalf("compact evidence exceeded its attempt or response limit:\n%s", text)
 	}
 }
 
@@ -411,6 +515,17 @@ func failedExecution() *engine.HTTPExecution {
 		StartedAt: time.Unix(1_700_000_000, 0), CompletedAt: time.Unix(1_700_000_000, int64(time.Millisecond)),
 		Err: errors.New("send request: network unavailable"),
 	}
+}
+
+func distinctViolationTrials(count int, prefix string) []engine.TrialResult {
+	trials := make([]engine.TrialResult, count)
+	for index := range trials {
+		trial := completedTextInput(engine.RunOutcomeViolated, -1).Result.Trials[0]
+		trial.Number = index + 1
+		trial.Run.History.Attempts[0].Execution.Response.Body = []byte(fmt.Sprintf(`{"source":"%s-%d"}`, prefix, index+1))
+		trials[index] = trial
+	}
+	return trials
 }
 
 func assertContains(t *testing.T, value string, fragments ...string) {

@@ -46,30 +46,29 @@ func TestVulnerableInventoryEndToEnd(t *testing.T) {
 		"VIOLATED",
 		"Requested       10",
 		"Completed       10",
-		"10 of 10 completed trials demonstrated the violation",
+		"10/10 trials demonstrated the violation",
 		"First violation Trial 1",
 		"Status          REDUCED",
-		"Candidates      1 evaluated",
-		"Smallest observed failure",
-		"Attempts      2",
-		"Concurrency   2",
-		"Violations    10 of 10 trials",
-		"not proof that no smaller failure exists",
+		"Attempts        2",
+		"Concurrency     2",
+		"Violations      10/10 trials",
+		"Smallest observed failure; a smaller one may still exist.",
 		"Expected        $[\"stock\"] >= 0",
 		"Observed        $[\"stock\"] = -1",
 		"Attempt #1",
 		"Attempt #2",
-		"Trials 2–10 had the same violation evidence as Trial 1.",
+		"Evidence\n  Smallest observed failure · Trial 1",
+		"Run with --verbose for all trial evidence.",
 		"concurtest run --attempts 2 --concurrency 2 --no-reduce "+scenarioPath,
 	)
-	if count := strings.Count(report, "HTTP 201 Created"); count < 4 || count >= 60 {
-		t.Errorf("successful purchase statuses = %d, want compact representative evidence\n%s", count, report)
+	if count := strings.Count(report, "HTTP 201 Created"); count != 2 {
+		t.Errorf("successful purchase statuses = %d, want one compact selected trial\n%s", count, report)
 	}
-	if count := strings.Count(report, `Response        "{\"accepted\":true}\n"`); count < 4 || count >= 60 {
-		t.Errorf("successful purchase responses = %d, want compact representative evidence\n%s", count, report)
+	if count := strings.Count(report, `Response        "{\"accepted\":true}\n"`); count != 2 {
+		t.Errorf("successful purchase responses = %d, want one compact selected trial\n%s", count, report)
 	}
-	if count := strings.Count(report, "Violation · Trial"); count < 1 || count >= 10 {
-		t.Errorf("baseline representative sections = %d, want compact distinct evidence\n%s", count, report)
+	if strings.Contains(report, "Violation · Trial") || strings.Contains(report, "Candidates      1 evaluated") {
+		t.Errorf("compact report included verbose baseline or candidate details\n%s", report)
 	}
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/state", nil)
@@ -126,27 +125,26 @@ func TestVulnerableInventoryHistoryEndToEnd(t *testing.T) {
 		"VIOLATED",
 		"Requested       10",
 		"Completed       10",
-		"10 of 10 completed trials demonstrated the violation",
+		"10/10 trials demonstrated the violation",
 		"First violation Trial 1",
 		"Status          REDUCED",
-		"Candidates      1 evaluated",
-		"Smallest observed failure",
-		"Attempts      2",
-		"Concurrency   2",
-		"Violations    10 of 10 trials",
+		"Attempts        2",
+		"Concurrency     2",
+		"Violations      10/10 trials",
+		"Evidence\n  Smallest observed failure · Trial 1",
 		"Expected        At most 1 successful attempt",
 		"Success statuses HTTP 201 Created",
 		"Observed        2 successful attempts",
-		"Successful       #1, #2",
-		"Beyond maximum   #2",
-		`Response        "{\"stock\":0}\n"`,
+		"Successful       #",
+		"Beyond maximum   #",
+		`Response        "{\"accepted\":true}\n"`,
 		"concurtest run --attempts 2 --concurrency 2 --no-reduce "+scenarioPath,
 	)
-	if count := strings.Count(report, "Beyond maximum   #2"); count < 1 || count >= 11 {
-		t.Errorf("over-limit evidence fields = %d, want compact representative evidence\n%s", count, report)
+	if count := strings.Count(report, "Beyond maximum   #"); count != 1 {
+		t.Errorf("over-limit evidence fields = %d, want one invariant summary\n%s", count, report)
 	}
-	if count := strings.Count(report, "HTTP 201 Created"); count < 4 {
-		t.Errorf("successful purchase statuses = %d, want representative evidence\n%s", count, report)
+	if count := strings.Count(report, "HTTP 201 Created"); count != 3 {
+		t.Errorf("successful purchase statuses = %d, want one invariant status line and one compact selected trial\n%s", count, report)
 	}
 	if strings.Contains(report, "Trial 10 · VIOLATED") {
 		t.Fatalf("default report expanded every equivalent trial:\n%s", report)
@@ -177,7 +175,7 @@ func TestVulnerableInventoryVerboseEndToEnd(t *testing.T) {
 		t.Fatalf("verbose selected evidence sections = %d, want 10\n%s", count, report)
 	}
 	assertOutputContains(t, report, "Candidate results", "Selected candidate evidence")
-	if strings.Contains(report, "same violation evidence") || strings.Contains(report, "Use --verbose") {
+	if strings.Contains(report, "same violation evidence") || strings.Contains(report, "Run with --verbose") {
 		t.Fatalf("verbose report included compact evidence summaries:\n%s", report)
 	}
 }

@@ -317,13 +317,12 @@ request bodies are never emitted. The top-level baseline is not duplicated
 inside reduction output; rejected candidates retain summaries, while selected
 or interrupted candidates may retain their complete ordered trials.
 
-The default text presentation is optimized for terminal scanning. It expands
-one representative for each semantically distinct violation, always expands
-errored and inconclusive trials, and summarizes equivalent violations by their
-stable trial numbers. Equivalence ignores timing jitter but includes invariant
-values, stage and attempt presence, stable attempt identities, errors, HTTP
-statuses, and the same bounded response excerpts shown to the user. Verbose
-text expands every retained trial and retained reduction candidate evidence.
+The default text presentation has a fixed evidence budget. It shows one
+violating trial from the smallest selected reduction, or the first baseline
+violation when no reduced result exists. It includes at most four relevant
+attempts with 160-byte response excerpts and one example of each problem
+status. Additional evidence is summarized. Verbose text expands every retained
+trial and retained reduction candidate with 512-byte response excerpts.
 
 Terminal color is a CLI presentation decision rather than engine state. Auto
 mode requires a terminal, respects a non-empty `NO_COLOR`, and emits no ANSI

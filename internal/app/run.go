@@ -438,7 +438,7 @@ func loadScenario(path string) (scenario.Definition, error) {
 func writeUsage(writer io.Writer) error {
 	_, err := io.WriteString(
 		writer,
-		"Usage:\n  concurtest run [--attempts N] [--concurrency N] [--no-reduce] [--format text|json] [--verbose] [--color auto|always|never] <scenario.yaml>\n\nRuns one adversarial scenario against its configured target. Text output is the default. Use --verbose for all retained text evidence, or --format json for structured automation output.\n",
+		"Usage:\n  concurtest run [--attempts N] [--concurrency N] [--no-reduce] [--format text|json] [--verbose] [--color auto|always|never] <scenario.yaml>\n\nRuns one adversarial scenario against its configured target. Text output is the default. Run with --verbose to display all retained trial evidence, or --format json for structured automation output.\n",
 	)
 	return err
 }

@@ -18,7 +18,11 @@ import (
 	"github.com/eumarumar/concurtest/internal/reduction"
 )
 
-const maxResponseExcerptBytes = 512
+const (
+	maxResponseExcerptBytes        = 512
+	maxCompactResponseExcerptBytes = 160
+	maxCompactAttempts             = 4
+)
 
 const (
 	ansiReset  = "\x1b[0m"
@@ -161,11 +165,19 @@ func WriteTextWithOptions(writer io.Writer, input Input, options TextOptions) er
 		writeRunProblem(buffer, style, input.RunError)
 	}
 
-	writeTrialCollection(buffer, style, input.Scenario, input.Result, "Baseline", options, nil)
+	if options.Verbose {
+		writeTrialCollection(buffer, style, input.Scenario, input.Result, "Baseline")
+	}
 	if input.Reduction != nil {
 		writeReduction(buffer, style, input.Scenario, *input.Reduction, input.RunError, options)
 	}
+	if !options.Verbose {
+		writeCompactEvidence(buffer, style, input)
+	}
 	writeReproduction(buffer, style, input)
+	if !options.Verbose {
+		fmt.Fprintf(buffer, "\n%s\n", style.note("Run with --verbose for all trial evidence."))
+	}
 
 	if err := buffer.Flush(); err != nil {
 		return failure.Wrap(failure.CodeReportWriteFailed, "write text report", err)
@@ -180,13 +192,13 @@ func aggregateSentence(input Input, counts statusCounts) string {
 	}
 	switch input.Result.Status {
 	case engine.TrialStatusPassed:
-		return fmt.Sprintf("All %d completed trials passed.", completed)
+		return fmt.Sprintf("%d/%d trials passed.", counts.passed, completed)
 	case engine.TrialStatusViolated:
-		return fmt.Sprintf("%d of %d completed trials demonstrated the violation.", counts.violated, completed)
+		return fmt.Sprintf("%d/%d trials demonstrated the violation.", counts.violated, completed)
 	case engine.TrialStatusInconclusive:
-		return fmt.Sprintf("%d of %d completed trials were inconclusive.", counts.inconclusive, completed)
+		return fmt.Sprintf("%d/%d trials were inconclusive.", counts.inconclusive, completed)
 	case engine.TrialStatusErrored:
-		return fmt.Sprintf("%d of %d completed trials encountered execution problems.", counts.errored, completed)
+		return fmt.Sprintf("%d/%d trials encountered problems.", counts.errored, completed)
 	default:
 		return "The run produced an unknown result."
 	}
@@ -295,67 +307,15 @@ func firstEvaluation(trials []engine.TrialResult) *engine.InvariantEvaluation {
 
 func trialStatusLabel(status engine.TrialStatus) string { return strings.ToUpper(string(status)) }
 
-type violationGroup struct {
-	representative int
-	additional     []int
-}
-
-func writeTrialCollection(writer io.Writer, style textStyle, scenario engine.Scenario, result engine.TrialsResult, label string, options TextOptions, excludeKeys map[string]struct{}) {
+func writeTrialCollection(writer io.Writer, style textStyle, scenario engine.Scenario, result engine.TrialsResult, label string) {
 	if len(result.Trials) == 0 {
 		fmt.Fprintf(writer, "\n%s\n  No trial evidence was recorded.\n", style.heading(label+" evidence"))
 		return
 	}
 
-	seen := make(map[string]*violationGroup)
-	groups := make([]*violationGroup, 0)
-	detailed := make([]engine.TrialResult, 0, len(result.Trials))
-	for _, trial := range result.Trials {
-		if options.Verbose {
-			detailed = append(detailed, trial)
-			continue
-		}
-		switch trial.Status {
-		case engine.TrialStatusViolated:
-			key := trialEvidenceKey(trial)
-			if _, excluded := excludeKeys[key]; excluded {
-				continue
-			}
-			if group, ok := seen[key]; ok {
-				group.additional = append(group.additional, trial.Number)
-				continue
-			}
-			group := &violationGroup{representative: trial.Number}
-			seen[key] = group
-			groups = append(groups, group)
-			detailed = append(detailed, trial)
-		case engine.TrialStatusInconclusive, engine.TrialStatusErrored:
-			detailed = append(detailed, trial)
-		}
-	}
-
-	if len(detailed) == 0 {
-		counts := trialCounts(result.Trials)
-		if counts.passed == len(result.Trials) {
-			fmt.Fprintf(writer, "\n%s\n  All %d passing trials are summarized above.\n", style.heading(label+" evidence"), counts.passed)
-		}
-		return
-	}
-
 	fmt.Fprintf(writer, "\n%s\n", style.heading(label+" evidence"))
-	for _, trial := range detailed {
+	for _, trial := range result.Trials {
 		writeTrialEvidence(writer, style, scenario, trial, label)
-	}
-	if !options.Verbose {
-		for _, group := range groups {
-			if len(group.additional) > 0 {
-				fmt.Fprintf(writer, "\n  %s\n", style.note(fmt.Sprintf("Trials %s had the same violation evidence as Trial %d.", formatTrialNumbers(group.additional), group.representative)))
-			}
-		}
-		counts := trialCounts(result.Trials)
-		if counts.passed > 0 {
-			fmt.Fprintf(writer, "  %s\n", style.note(fmt.Sprintf("%d passing trials are summarized.", counts.passed)))
-		}
-		fmt.Fprintf(writer, "  %s\n", style.note("Use --verbose to display every retained trial."))
 	}
 }
 
@@ -363,13 +323,15 @@ func writeReduction(writer io.Writer, style textStyle, scenario engine.Scenario,
 	status := reductionStatusLabel(result.Status, runErr)
 	fmt.Fprintf(writer, "\n%s\n", style.heading("Reduction"))
 	fmt.Fprintf(writer, "  Status          %s\n", style.status(status))
-	fmt.Fprintf(writer, "  Candidates      %d evaluated\n", len(result.Candidates))
-	fmt.Fprintf(writer, "  Duration        %s\n", displayDuration(result.Duration()))
 
-	if options.Verbose && len(result.Candidates) > 0 {
-		fmt.Fprintln(writer, "  Candidate results")
-		for _, candidate := range result.Candidates {
-			writeCandidateResult(writer, candidate)
+	if options.Verbose {
+		fmt.Fprintf(writer, "  Candidates      %d evaluated\n", len(result.Candidates))
+		fmt.Fprintf(writer, "  Duration        %s\n", displayDuration(result.Duration()))
+		if len(result.Candidates) > 0 {
+			fmt.Fprintln(writer, "  Candidate results")
+			for _, candidate := range result.Candidates {
+				writeCandidateResult(writer, candidate)
+			}
 		}
 	}
 
@@ -388,62 +350,21 @@ func writeReduction(writer io.Writer, style textStyle, scenario engine.Scenario,
 		}
 	case reduction.StatusReduced, reduction.StatusUnchanged, reduction.StatusLimited:
 		selected := reductionSummary(*result.SelectedTrials)
-		fmt.Fprintln(writer, "  Smallest observed failure")
-		fmt.Fprintf(writer, "    Attempts      %d\n", result.Selected.Attempts)
-		fmt.Fprintf(writer, "    Concurrency   %d\n", result.Selected.Concurrency)
-		fmt.Fprintf(writer, "    Violations    %d of %d trials\n", selected.Violated, selected.Requested)
+		fmt.Fprintf(writer, "  Attempts        %d\n", result.Selected.Attempts)
+		fmt.Fprintf(writer, "  Concurrency     %d\n", result.Selected.Concurrency)
+		fmt.Fprintf(writer, "  Violations      %d/%d trials\n", selected.Violated, selected.Requested)
 		if result.Status == reduction.StatusUnchanged {
 			fmt.Fprintln(writer, "  Finding         No smaller tested configuration met the reproduction rule.")
 		}
 		if result.Status == reduction.StatusLimited {
 			fmt.Fprintf(writer, "  Finding         The %d-candidate limit was reached; smaller untested configurations may remain.\n", reduction.MaxCandidates)
 		}
-		fmt.Fprintln(writer, "  Note            This is an observed failure, not proof that no smaller failure exists.")
+		fmt.Fprintln(writer, "  Note            Smallest observed failure; a smaller one may still exist.")
 
-		if result.Status == reduction.StatusReduced {
-			baselineKeys := violationKeys(result.Baseline.Trials)
-			renderable := countRenderableTrials(*result.SelectedTrials, options, baselineKeys)
-			writeTrialCollection(writer, style, scenario, *result.SelectedTrials, "Selected candidate", options, baselineKeys)
-			if !options.Verbose && renderable == 0 {
-				fmt.Fprintln(writer, "  Selected candidate violations matched the baseline evidence.")
-			}
+		if options.Verbose && result.Status == reduction.StatusReduced {
+			writeTrialCollection(writer, style, scenario, *result.SelectedTrials, "Selected candidate")
 		}
 	}
-}
-
-func countRenderableTrials(result engine.TrialsResult, options TextOptions, exclude map[string]struct{}) int {
-	if options.Verbose {
-		return len(result.Trials)
-	}
-	seen := make(map[string]struct{})
-	count := 0
-	for _, trial := range result.Trials {
-		switch trial.Status {
-		case engine.TrialStatusViolated:
-			key := trialEvidenceKey(trial)
-			if _, ok := exclude[key]; ok {
-				continue
-			}
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-			count++
-		case engine.TrialStatusInconclusive, engine.TrialStatusErrored:
-			count++
-		}
-	}
-	return count
-}
-
-func violationKeys(trials []engine.TrialResult) map[string]struct{} {
-	keys := make(map[string]struct{})
-	for _, trial := range trials {
-		if trial.Status == engine.TrialStatusViolated {
-			keys[trialEvidenceKey(trial)] = struct{}{}
-		}
-	}
-	return keys
 }
 
 func reductionStatusLabel(status reduction.Status, runErr error) string {
@@ -487,7 +408,199 @@ func writeInterruptedReductionEvidence(writer io.Writer, style textStyle, scenar
 		return
 	}
 	fmt.Fprintf(writer, "  Interrupted at  %d attempts · concurrency %d\n", candidate.Candidate.Attempts, candidate.Candidate.Concurrency)
-	writeTrialCollection(writer, style, scenario, *candidate.Trials, "Interrupted candidate", options, violationKeys(result.Baseline.Trials))
+	if options.Verbose {
+		writeTrialCollection(writer, style, scenario, *candidate.Trials, "Interrupted candidate")
+	}
+}
+
+type compactTrialSource struct {
+	label  string
+	trials []engine.TrialResult
+}
+
+func writeCompactEvidence(writer io.Writer, style textStyle, input Input) {
+	violation, violationLabel, hasViolation := compactViolation(input)
+	problemSources := compactProblemSources(input)
+	_, _, errored := compactProblem(problemSources, engine.TrialStatusErrored)
+	_, _, inconclusive := compactProblem(problemSources, engine.TrialStatusInconclusive)
+	if !hasViolation && errored == 0 && inconclusive == 0 {
+		return
+	}
+
+	fmt.Fprintf(writer, "\n%s\n", style.heading("Evidence"))
+	if hasViolation {
+		fmt.Fprintf(writer, "  %s · Trial %d\n", violationLabel, violation.Number)
+		writeCompactViolation(writer, input.Scenario, violation)
+	}
+	writeCompactProblem(writer, style, problemSources, engine.TrialStatusErrored)
+	writeCompactProblem(writer, style, problemSources, engine.TrialStatusInconclusive)
+}
+
+func compactViolation(input Input) (engine.TrialResult, string, bool) {
+	if input.Reduction != nil && input.Reduction.SelectedTrials != nil {
+		if trial, ok := firstTrialWithStatus(input.Reduction.SelectedTrials.Trials, engine.TrialStatusViolated); ok {
+			return trial, "Smallest observed failure", true
+		}
+	}
+	if trial, ok := firstTrialWithStatus(input.Result.Trials, engine.TrialStatusViolated); ok {
+		return trial, "Baseline failure", true
+	}
+	return engine.TrialResult{}, "", false
+}
+
+func firstTrialWithStatus(trials []engine.TrialResult, status engine.TrialStatus) (engine.TrialResult, bool) {
+	for _, trial := range trials {
+		if trial.Status == status {
+			return trial, true
+		}
+	}
+	return engine.TrialResult{}, false
+}
+
+func writeCompactViolation(writer io.Writer, scenario engine.Scenario, trial engine.TrialResult) {
+	attempts := trial.Run.History.Attempts
+	description := "attempt"
+	if scenario.Invariant.MaximumSuccessfulAttempts != nil && trial.Run.Evaluation != nil && trial.Run.Evaluation.MaximumSuccessfulAttempts != nil {
+		description = "successful attempt"
+		successful := make(map[int]struct{}, len(trial.Run.Evaluation.MaximumSuccessfulAttempts.SuccessfulAttemptIDs))
+		for _, id := range trial.Run.Evaluation.MaximumSuccessfulAttempts.SuccessfulAttemptIDs {
+			successful[id] = struct{}{}
+		}
+		filtered := make([]engine.Attempt, 0, len(successful))
+		for _, attempt := range attempts {
+			if _, ok := successful[attempt.ID]; ok {
+				filtered = append(filtered, attempt)
+			}
+		}
+		attempts = filtered
+	}
+	writeCompactAttempts(writer, attempts, description)
+	if scenario.Invariant.JSONIntegerMinimum != nil {
+		writeCompactObservation(writer, scenario.Observation, trial.Run.Observation)
+	}
+}
+
+func writeCompactAttempts(writer io.Writer, attempts []engine.Attempt, description string) {
+	shown := min(len(attempts), maxCompactAttempts)
+	for _, attempt := range attempts[:shown] {
+		writeCompactAttempt(writer, attempt)
+	}
+	if omitted := len(attempts) - shown; omitted > 0 {
+		fmt.Fprintf(writer, "    %d more %s not shown.\n", omitted, pluralize(description, omitted))
+	}
+}
+
+func writeCompactAttempt(writer io.Writer, attempt engine.Attempt) {
+	if attempt.Execution == nil {
+		fmt.Fprintf(writer, "    Attempt #%d     %s · not started\n", attempt.ID, attempt.OperationName)
+		return
+	}
+	execution := attempt.Execution
+	fmt.Fprintf(writer, "    Attempt #%d     %s %s · %s\n", attempt.ID, execution.Request.Method, requestTarget(execution.Request.URL), executionStatus(execution))
+	writeCompactExecutionDetails(writer, execution, "      ")
+}
+
+func writeCompactObservation(writer io.Writer, configured *engine.HTTPRequest, execution *engine.HTTPExecution) {
+	if configured == nil {
+		return
+	}
+	if execution == nil {
+		fmt.Fprintln(writer, "    Observation    not reached")
+		return
+	}
+	fmt.Fprintf(writer, "    Observation    %s %s · %s\n", execution.Request.Method, requestTarget(execution.Request.URL), executionStatus(execution))
+	writeCompactExecutionDetails(writer, execution, "      ")
+}
+
+func compactProblemSources(input Input) []compactTrialSource {
+	sources := make([]compactTrialSource, 0, 2)
+	if input.RunError != nil && input.Reduction != nil && len(input.Reduction.Candidates) > 0 {
+		candidate := input.Reduction.Candidates[len(input.Reduction.Candidates)-1]
+		if candidate.Trials != nil {
+			sources = append(sources, compactTrialSource{label: "Interrupted candidate", trials: candidate.Trials.Trials})
+		}
+	}
+	return append(sources, compactTrialSource{label: "Baseline", trials: input.Result.Trials})
+}
+
+func compactProblem(sources []compactTrialSource, status engine.TrialStatus) (engine.TrialResult, string, int) {
+	var first engine.TrialResult
+	firstLabel := ""
+	count := 0
+	for _, source := range sources {
+		for _, trial := range source.trials {
+			if trial.Status != status {
+				continue
+			}
+			if count == 0 {
+				first = trial
+				firstLabel = source.label
+			}
+			count++
+		}
+	}
+	return first, firstLabel, count
+}
+
+func writeCompactProblem(writer io.Writer, style textStyle, sources []compactTrialSource, status engine.TrialStatus) {
+	trial, source, count := compactProblem(sources, status)
+	if count == 0 {
+		return
+	}
+	fmt.Fprintf(writer, "  %s · %s · Trial %d · %s\n", style.status("Problem"), source, trial.Number, trialStatusLabel(status))
+	if trial.Err != nil {
+		fmt.Fprintf(writer, "    %s\n", quoted(trial.Err.Error()))
+	} else if status == engine.TrialStatusInconclusive {
+		failed := failedAttemptCount(trial.Run.History)
+		fmt.Fprintf(writer, "    %d/%d attempts failed or did not start.\n", failed, len(trial.Run.History.Attempts))
+	}
+	writeCompactProblemExecutions(writer, trial)
+	if omitted := count - 1; omitted > 0 {
+		fmt.Fprintf(writer, "    %d more %s %s not shown.\n", omitted, status, pluralize("trial", omitted))
+	}
+}
+
+func writeCompactProblemExecutions(writer io.Writer, trial engine.TrialResult) {
+	if stageExecutionProblem(trial.Run.Setup) {
+		writeCompactStage(writer, "Setup", trial.Run.Setup)
+	}
+
+	problemAttempts := make([]engine.Attempt, 0)
+	for _, attempt := range trial.Run.History.Attempts {
+		if attempt.Execution == nil || attempt.Execution.Err != nil || attempt.Execution.Response == nil {
+			problemAttempts = append(problemAttempts, attempt)
+		}
+	}
+	writeCompactAttempts(writer, problemAttempts, "problem attempt")
+
+	if stageExecutionProblem(trial.Run.Observation) {
+		writeCompactStage(writer, "Observation", trial.Run.Observation)
+	}
+}
+
+func stageExecutionProblem(execution *engine.HTTPExecution) bool {
+	return execution != nil && (execution.Err != nil || execution.Response == nil || execution.Response.StatusCode < http.StatusOK || execution.Response.StatusCode >= http.StatusMultipleChoices)
+}
+
+func writeCompactStage(writer io.Writer, label string, execution *engine.HTTPExecution) {
+	fmt.Fprintf(writer, "    %-15s %s %s · %s\n", label, execution.Request.Method, requestTarget(execution.Request.URL), executionStatus(execution))
+	writeCompactExecutionDetails(writer, execution, "      ")
+}
+
+func writeCompactExecutionDetails(writer io.Writer, execution *engine.HTTPExecution, indent string) {
+	if execution.Response != nil && (len(execution.Response.Body) > 0 || execution.Response.BodyTruncated) {
+		fmt.Fprintf(writer, "%sResponse        %s\n", indent, boundedResponseExcerpt(execution.Response, maxCompactResponseExcerptBytes))
+	}
+	if execution.Err != nil {
+		fmt.Fprintf(writer, "%sError           %s\n", indent, quoted(execution.Err.Error()))
+	}
+}
+
+func pluralize(word string, count int) string {
+	if count == 1 {
+		return word
+	}
+	return word + "s"
 }
 
 func reductionSummary(result engine.TrialsResult) reduction.TrialSummary {
@@ -730,10 +843,14 @@ func displayStatus(statusCode int) string {
 }
 
 func responseExcerpt(response *engine.HTTPResponse) string {
+	return boundedResponseExcerpt(response, maxResponseExcerptBytes)
+}
+
+func boundedResponseExcerpt(response *engine.HTTPResponse, maximum int) string {
 	body := response.Body
 	truncated := response.BodyTruncated
-	if len(body) > maxResponseExcerptBytes {
-		body = body[:maxResponseExcerptBytes]
+	if len(body) > maximum {
+		body = body[:maximum]
 		truncated = true
 	}
 	excerpt := strconv.QuoteToGraphic(string(body))
@@ -743,36 +860,6 @@ func responseExcerpt(response *engine.HTTPResponse) string {
 	return excerpt
 }
 
-func trialEvidenceKey(trial engine.TrialResult) string {
-	var key strings.Builder
-	fmt.Fprintf(&key, "status=%q;trial_error=%q;outcome=%q;", trial.Status, errorText(trial.Err), trial.Run.Outcome)
-	appendInvariantKey(&key, trial.Run.Evaluation)
-	appendExecutionKey(&key, "setup", trial.Run.Setup)
-	fmt.Fprintf(&key, "attempts=%d;", len(trial.Run.History.Attempts))
-	for _, attempt := range trial.Run.History.Attempts {
-		fmt.Fprintf(&key, "attempt=%d,%q;", attempt.ID, attempt.OperationName)
-		appendExecutionKey(&key, "execution", attempt.Execution)
-	}
-	appendExecutionKey(&key, "observation", trial.Run.Observation)
-	return key.String()
-}
-
-func appendInvariantKey(key *strings.Builder, evaluation *engine.InvariantEvaluation) {
-	if evaluation == nil {
-		key.WriteString("invariant=nil;")
-		return
-	}
-	fmt.Fprintf(key, "violated=%t;", evaluation.Violated)
-	if evaluation.JSONIntegerMinimum != nil {
-		value := evaluation.JSONIntegerMinimum
-		fmt.Fprintf(key, "json=%q,%q,%d,%d,%t;", value.Invariant.Name, formatJSONPath(value.Invariant.Path), value.Invariant.Minimum, value.Observed, value.Violated)
-	}
-	if evaluation.MaximumSuccessfulAttempts != nil {
-		value := evaluation.MaximumSuccessfulAttempts
-		fmt.Fprintf(key, "history=%q,%d,%v,%v,%v,%t;", value.Invariant.Name, value.Invariant.Maximum, value.Invariant.SuccessfulStatusCodes, value.SuccessfulAttemptIDs, value.OverLimitAttemptIDs, value.Violated)
-	}
-}
-
 func formatJSONPath(path []string) string {
 	var formatted strings.Builder
 	formatted.WriteByte('$')
@@ -780,43 +867,6 @@ func formatJSONPath(path []string) string {
 		fmt.Fprintf(&formatted, "[%q]", segment)
 	}
 	return formatted.String()
-}
-
-func appendExecutionKey(key *strings.Builder, label string, execution *engine.HTTPExecution) {
-	if execution == nil {
-		fmt.Fprintf(key, "%s=nil;", label)
-		return
-	}
-	fmt.Fprintf(key, "%s=%q,%q,%q;", label, execution.Request.Method, requestTarget(execution.Request.URL), errorText(execution.Err))
-	if execution.Response == nil {
-		key.WriteString("response=nil;")
-		return
-	}
-	fmt.Fprintf(key, "response=%d,%q,%t;", execution.Response.StatusCode, responseExcerpt(execution.Response), execution.Response.BodyTruncated)
-}
-
-func errorText(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
-}
-
-func formatTrialNumbers(numbers []int) string {
-	parts := make([]string, 0, len(numbers))
-	for start := 0; start < len(numbers); {
-		end := start
-		for end+1 < len(numbers) && numbers[end+1] == numbers[end]+1 {
-			end++
-		}
-		if end == start {
-			parts = append(parts, strconv.Itoa(numbers[start]))
-		} else {
-			parts = append(parts, fmt.Sprintf("%d–%d", numbers[start], numbers[end]))
-		}
-		start = end + 1
-	}
-	return strings.Join(parts, ", ")
 }
 
 func quoted(value string) string { return strconv.QuoteToGraphic(value) }

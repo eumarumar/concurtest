@@ -276,7 +276,7 @@ func TestRunReportsViolationAndPrintsTargetBeforeRequests(t *testing.T) {
 		"VIOLATED",
 		"Requested       1",
 		"Completed       1",
-		"1 of 1 completed trials demonstrated the violation",
+		"1/1 trials demonstrated the violation",
 		"First violation Trial 1",
 		"Expected        $[\"stock\"] >= 0",
 		"Observed        $[\"stock\"] = -1",
@@ -315,7 +315,7 @@ func TestRunReturnsSuccessForTrustworthyPass(t *testing.T) {
 	if code := app.Run(context.Background(), []string{"run", path}, &stdout, &stderr); code != 0 {
 		t.Fatalf("Run() exit code = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
 	}
-	assertOutputContains(t, stdout.String(), "PASSED", "Requested       1", "All 1 passing trials are summarized above.")
+	assertOutputContains(t, stdout.String(), "PASSED", "Requested       1", "1/1 trials passed.", "Run with --verbose for all trial evidence.")
 	if strings.Contains(stdout.String(), "Trial 1 · PASSED") {
 		t.Fatalf("passing trial evidence was expanded:\n%s", stdout.String())
 	}
@@ -392,7 +392,7 @@ func TestRunUsesRequestTimeoutAndReturnsInconclusive(t *testing.T) {
 	}
 	assertOutputContains(t, stdout.String(),
 		"INCONCLUSIVE",
-		"1 of 1 attempts failed or did not start",
+		"1/1 attempts failed or did not start",
 		"Client.Timeout exceeded",
 	)
 }
@@ -435,8 +435,8 @@ func TestRunContinuesAfterTrialErrorAndViolationControlsExitCode(t *testing.T) {
 		"Violated        1",
 		"Errored         1",
 		"First violation Trial 2",
-		"Trial 1 · ERRORED",
-		"Violation · Trial 2",
+		"Problem · Baseline · Trial 1 · ERRORED",
+		"Baseline failure · Trial 2",
 	)
 }
 
@@ -500,14 +500,17 @@ func TestRunReducesToSmallestObservedCandidate(t *testing.T) {
 	assertOutputContains(t, stdout.String(),
 		"Reduction · Up to 100 smaller configurations may also run.",
 		"Status          REDUCED",
-		"Candidates      1 evaluated",
-		"Smallest observed failure",
-		"Attempts      2",
-		"Concurrency   2",
-		"Violations    3 of 3 trials",
-		"not proof that no smaller failure exists",
+		"Attempts        2",
+		"Concurrency     2",
+		"Violations      3/3 trials",
+		"Smallest observed failure; a smaller one may still exist.",
+		"Evidence\n  Smallest observed failure · Trial 1",
+		"Run with --verbose for all trial evidence.",
 		"concurtest run --attempts 2 --concurrency 2 --no-reduce "+path,
 	)
+	if strings.Contains(stdout.String(), "Candidates      1 evaluated") {
+		t.Fatalf("compact output included reduction candidate details:\n%s", stdout.String())
+	}
 	if setups.Load() != 6 {
 		t.Errorf("setup calls = %d, want 6 for baseline and selected candidate", setups.Load())
 	}
