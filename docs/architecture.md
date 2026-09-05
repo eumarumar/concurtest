@@ -330,10 +330,13 @@ escapes when output is redirected. Explicit always and never modes override
 automatic detection. JSON never receives terminal presentation options and its
 versioned contract is unchanged.
 
-Text reproduction commands use POSIX shell quoting and remain free of color
-escapes. Presentation flags are intentionally omitted so the command describes
-the same scenario and reduced execution configuration without changing
-execution or the JSON contract.
+Text and JSON reproduction commands always include effective attempts and
+concurrency, plus `--no-reduce` when reduction is disabled. When reduction has
+selected a result, commands use its selected values and disable further
+reduction; otherwise they use the effective baseline settings. Other settings,
+including enabled reduction, continue to come from the referenced scenario file.
+Text commands use POSIX shell quoting, remain free of color escapes, and omit
+presentation flags. JSON reproduction arguments retain `--format json`.
 
 ## Performance
 

@@ -15,6 +15,29 @@ import (
 	"github.com/eumarumar/concurtest/internal/report"
 )
 
+func TestWriteTextStartWarningMatchesConcurrency(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		concurrency int
+		warning     string
+	}{
+		{1, "Warning · This run sends requests and may change target data."},
+		{2, "Warning · This run sends concurrent requests and may change target data."},
+	} {
+		t.Run(fmt.Sprint(test.concurrency), func(t *testing.T) {
+			var output bytes.Buffer
+			if err := report.WriteTextStart(&output, report.TextStartInput{Concurrency: test.concurrency}, report.TextOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			assertContains(t, output.String(), test.warning)
+			if test.concurrency == 1 && strings.Contains(output.String(), "concurrent requests") {
+				t.Fatalf("sequential run warning claims concurrency: %s", output.String())
+			}
+		})
+	}
+}
+
 func TestWriteTextPresentsViolationEvidenceSafely(t *testing.T) {
 	t.Parallel()
 
@@ -43,7 +66,7 @@ func TestWriteTextPresentsViolationEvidenceSafely(t *testing.T) {
 		`Response        "{\"accepted\":true}"`,
 		"GET /state?detail=full · HTTP 200 OK",
 		`Response        "{\"stock\":-1}"`,
-		"Reproduce\n  concurtest run scenarios/inventory.yaml",
+		"Reproduce\n  concurtest run --attempts 2 --concurrency 2 --no-reduce scenarios/inventory.yaml",
 		"Run with --verbose for all trial evidence.",
 	)
 	if strings.Contains(text, "POST /reset") {
@@ -293,7 +316,7 @@ func TestWriteTextColorIsOptionalAndDoesNotColorCommands(t *testing.T) {
 		t.Fatalf("plain report contains ANSI escapes: %q", plain.String())
 	}
 	assertContains(t, colored.String(), "\x1b[", "\x1b[0m")
-	command := "  concurtest run scenarios/inventory.yaml\n"
+	command := "  concurtest run --attempts 2 --concurrency 2 --no-reduce scenarios/inventory.yaml\n"
 	if !strings.Contains(colored.String(), command) || strings.Contains(command, "\x1b[") {
 		t.Fatalf("reproduction command is not plain and copyable:\n%q", colored.String())
 	}
@@ -381,12 +404,12 @@ func TestWriteTextQuotesReproductionPathsForPOSIXShells(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct{ path, want string }{
-		{"scenario.yaml", "concurtest run scenario.yaml"},
-		{"path with spaces/scenario.yaml", "concurtest run 'path with spaces/scenario.yaml'"},
-		{"owner's scenario.yaml", `concurtest run 'owner'"'"'s scenario.yaml'`},
-		{"$(touch nope).yaml", "concurtest run '$(touch nope).yaml'"},
-		{"-scenario.yaml", "concurtest run ./-scenario.yaml"},
-		{"", "concurtest run ''"},
+		{"scenario.yaml", "concurtest run --attempts 2 --concurrency 2 --no-reduce scenario.yaml"},
+		{"path with spaces/scenario.yaml", "concurtest run --attempts 2 --concurrency 2 --no-reduce 'path with spaces/scenario.yaml'"},
+		{"owner's scenario.yaml", `concurtest run --attempts 2 --concurrency 2 --no-reduce 'owner'"'"'s scenario.yaml'`},
+		{"$(touch nope).yaml", "concurtest run --attempts 2 --concurrency 2 --no-reduce '$(touch nope).yaml'"},
+		{"-scenario.yaml", "concurtest run --attempts 2 --concurrency 2 --no-reduce ./-scenario.yaml"},
+		{"", "concurtest run --attempts 2 --concurrency 2 --no-reduce ''"},
 	}
 	for _, test := range tests {
 		t.Run(test.path, func(t *testing.T) {

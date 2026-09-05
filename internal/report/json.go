@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -630,13 +629,7 @@ func requestFromEngine(request engine.HTTPRequest) requestJSON {
 
 func reproductionArguments(input Input) []string {
 	arguments := []string{"concurtest", "run", "--format", "json"}
-	if input.Reduction != nil && input.Reduction.SelectedTrials != nil {
-		arguments = append(arguments,
-			"--attempts", strconv.Itoa(input.Reduction.Selected.Attempts),
-			"--concurrency", strconv.Itoa(input.Reduction.Selected.Concurrency),
-			"--no-reduce",
-		)
-	}
+	arguments = append(arguments, reproductionExecutionArguments(input)...)
 	return append(arguments, input.ScenarioPath)
 }
 

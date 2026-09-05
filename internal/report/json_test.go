@@ -71,7 +71,7 @@ func TestWriteJSONProducesSchemaValidCompleteSafeEvidence(t *testing.T) {
 		t.Fatalf("passing trial omitted complete evidence: %#v", evidence)
 	}
 	arguments := document["reproduction"].(map[string]any)["arguments"].([]any)
-	if strings.Join(anyStrings(arguments), " ") != "concurtest run --format json scenarios/inventory.yaml" {
+	if strings.Join(anyStrings(arguments), " ") != "concurtest run --format json --attempts 2 --concurrency 2 --no-reduce scenarios/inventory.yaml" {
 		t.Fatalf("reproduction arguments = %#v", arguments)
 	}
 }

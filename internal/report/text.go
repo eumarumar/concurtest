@@ -63,6 +63,7 @@ type TextOptions struct {
 type TextStartInput struct {
 	ScenarioName     string
 	Target           string
+	Concurrency      int
 	ReductionEnabled bool
 }
 
@@ -97,13 +98,17 @@ func WriteTextStart(writer io.Writer, input TextStartInput, options TextOptions)
 		return failure.New(failure.CodeReportInvalid, "write text start: nil writer")
 	}
 	style := textStyle{color: options.Color}
+	warning := "Warning · This run sends requests and may change target data."
+	if input.Concurrency > 1 {
+		warning = "Warning · This run sends concurrent requests and may change target data."
+	}
 	if _, err := fmt.Fprintf(
 		writer,
 		"%s\n%s · %s\n%s\n",
 		style.heading("ConcurTest · "+input.ScenarioName),
 		style.heading("Target"),
 		input.Target,
-		style.wrap(ansiBold+ansiYellow, "Warning · This run sends concurrent requests and may change target data."),
+		style.wrap(ansiBold+ansiYellow, warning),
 	); err != nil {
 		return failure.Wrap(failure.CodeReportWriteFailed, "write text start", err)
 	}
@@ -610,9 +615,7 @@ func reductionSummary(result engine.TrialsResult) reduction.TrialSummary {
 
 func writeReproduction(writer io.Writer, style textStyle, input Input) {
 	arguments := []string{"concurtest", "run"}
-	if input.Reduction != nil && input.Reduction.SelectedTrials != nil {
-		arguments = append(arguments, "--attempts", strconv.Itoa(input.Reduction.Selected.Attempts), "--concurrency", strconv.Itoa(input.Reduction.Selected.Concurrency), "--no-reduce")
-	}
+	arguments = append(arguments, reproductionExecutionArguments(input)...)
 	arguments = append(arguments, shellPath(input.ScenarioPath))
 	fmt.Fprintf(writer, "\n%s\n  %s\n", style.heading("Reproduce"), strings.Join(arguments, " "))
 }

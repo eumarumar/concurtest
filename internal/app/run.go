@@ -101,6 +101,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		if err := report.WriteTextStart(stdout, report.TextStartInput{
 			ScenarioName:     definition.Name,
 			Target:           definition.Target,
+			Concurrency:      definition.Scenario.Concurrency,
 			ReductionEnabled: definition.Reduce,
 		}, textOptions); err != nil {
 			writeDiagnostic(stderr, "Could not write the run details: %v", err)

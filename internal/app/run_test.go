@@ -284,7 +284,7 @@ func TestRunReportsViolationAndPrintsTargetBeforeRequests(t *testing.T) {
 		"Attempt #2",
 		"HTTP 201 Created",
 		`Response        "{\"stock\":-1}"`,
-		"concurtest run "+path,
+		"concurtest run --attempts 2 --concurrency 2 --no-reduce "+path,
 	)
 	if strings.Contains(output.String(), "request-secret") || strings.Contains(output.String(), "response-secret") {
 		t.Fatalf("output exposed a header value:\n%s", output.String())
@@ -519,34 +519,74 @@ func TestRunReducesToSmallestObservedCandidate(t *testing.T) {
 func TestRunAppliesExecutionOverridesAndDisablesReduction(t *testing.T) {
 	t.Parallel()
 
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		requests.Add(1)
-		switch request.URL.Path {
-		case "/reset":
-			writer.WriteHeader(http.StatusNoContent)
-		case "/purchase":
-			writer.WriteHeader(http.StatusCreated)
-		case "/state":
-			_, _ = writer.Write([]byte(`{"stock":-1}`))
-		default:
-			http.NotFound(writer, request)
-		}
-	}))
-	t.Cleanup(server.Close)
-	path := writeScenarioFile(t, reductionScenarioYAML(server.URL, 4, 4, 3))
+	for _, format := range []string{"text", "json"} {
+		for _, concurrency := range []int{1, 2} {
+			t.Run(fmt.Sprintf("%s/concurrency=%d", format, concurrency), func(t *testing.T) {
+				t.Parallel()
+				var requests atomic.Int32
+				var warningBeforeRequests atomic.Bool
+				var stdout synchronizedBuffer
+				warning := "Warning · This run sends requests and may change target data."
+				if concurrency > 1 {
+					warning = "Warning · This run sends concurrent requests and may change target data."
+				}
+				server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+					if requests.Add(1) == 1 {
+						warningBeforeRequests.Store(strings.Contains(stdout.String(), warning))
+					}
+					switch request.URL.Path {
+					case "/reset":
+						writer.WriteHeader(http.StatusNoContent)
+					case "/purchase":
+						writer.WriteHeader(http.StatusCreated)
+					case "/state":
+						_, _ = writer.Write([]byte(`{"stock":-1}`))
+					default:
+						http.NotFound(writer, request)
+					}
+				}))
+				t.Cleanup(server.Close)
+				path := writeScenarioFile(t, reductionScenarioYAML(server.URL, 4, 4, 3))
 
-	var stdout, stderr bytes.Buffer
-	args := []string{"run", path, "--attempts=2", "--concurrency", "2", "--no-reduce"}
-	if code := app.Run(context.Background(), args, &stdout, &stderr); code != 1 {
-		t.Fatalf("Run() exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
-	}
-	assertOutputContains(t, stdout.String(), "Attempts        2", "Concurrency     2")
-	if strings.Contains(stdout.String(), "Up to 100 smaller configurations") || strings.Contains(stdout.String(), "Status          REDUCED") {
-		t.Fatalf("reduction ran despite --no-reduce:\n%s", stdout.String())
-	}
-	if requests.Load() != 12 {
-		t.Errorf("requests = %d, want 12 for three direct trials", requests.Load())
+				var stderr bytes.Buffer
+				args := []string{"run", path, "--attempts=2", "--concurrency", fmt.Sprint(concurrency), "--no-reduce", "--format", format}
+				if code := app.Run(context.Background(), args, &stdout, &stderr); code != 1 {
+					t.Fatalf("Run() exit code = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+				}
+				if stderr.Len() != 0 {
+					t.Fatalf("stderr = %q, want empty", stderr.String())
+				}
+				flags := fmt.Sprintf("--attempts 2 --concurrency %d --no-reduce ", concurrency)
+				if format == "text" {
+					assertOutputContains(t, stdout.String(), "Attempts        2", fmt.Sprintf("Concurrency     %d", concurrency), "concurtest run "+flags+path)
+					if !warningBeforeRequests.Load() {
+						t.Error("effective concurrency warning was not printed before the first request")
+					}
+					if concurrency == 1 && strings.Contains(stdout.String(), "concurrent requests") {
+						t.Error("sequential run warning claims concurrency")
+					}
+					if strings.Contains(stdout.String(), "Up to 100 smaller configurations") || strings.Contains(stdout.String(), "Status          REDUCED") {
+						t.Fatalf("reduction ran despite --no-reduce:\n%s", stdout.String())
+					}
+				} else {
+					var document struct {
+						Reproduction struct {
+							Arguments []string `json:"arguments"`
+						} `json:"reproduction"`
+					}
+					if err := json.Unmarshal([]byte(stdout.String()), &document); err != nil {
+						t.Fatal(err)
+					}
+					want := "concurtest run --format json " + flags + path
+					if got := strings.Join(document.Reproduction.Arguments, " "); got != want {
+						t.Fatalf("reproduction command = %q, want %q", got, want)
+					}
+				}
+				if requests.Load() != 12 {
+					t.Errorf("requests = %d, want 12 for three direct trials", requests.Load())
+				}
+			})
+		}
 	}
 }
 
