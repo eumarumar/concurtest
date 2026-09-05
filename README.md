@@ -7,7 +7,7 @@ framework used to build that application.
 
 The current v0 supports sequential reproducibility trials. A trial can reset
 the target, repeat one HTTP operation with bounded concurrency, and evaluate
-one invariant. An invariant can check a JSON integer at a chosen object path
+one invariant. An invariant can check a JSON integer at a chosen path
 after the operations or limit how many operation responses have successful
 HTTP statuses. An opt-in reduction pass can test smaller concurrent execution
 settings after a failure reproduces across a clean majority of trials.
@@ -49,8 +49,19 @@ invariant:
   minimum: 0
 ```
 
-Nested responses use one entry for each object level, such as
-`json_integer_path: [data, quantity]`. Array traversal is not supported.
+Nested responses use one entry for each object key or array index, such as
+`json_integer_path: [data, quantity]`. Array indexes start at zero:
+
+```yaml
+json_integer_path: [data, Products, 0, BasketItem, quantity]
+```
+
+This selects `quantity` inside the first product's `BasketItem`. Indexes may be
+unquoted integers or quoted decimal strings such as `'0'`. When traversing an
+object, entries match literal keys, including numeric keys. When traversing an
+array, entries must be non-negative decimal indexes without leading zeros.
+Missing keys, out-of-range indexes, and non-integer values produce an evaluation
+error. Reports retain path entries as strings, including indexes.
 
 The checked-in scenario starts with four attempts at concurrency four and runs
 10 independent trials. Each trial resets the inventory. After the failure

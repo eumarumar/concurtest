@@ -138,19 +138,28 @@ func TestWriteTextPresentsHistoryInvariant(t *testing.T) {
 func TestWriteTextPresentsNestedJSONPath(t *testing.T) {
 	t.Parallel()
 
-	input := completedTextInput(engine.RunOutcomePassed, 2)
-	path := []string{"data", "quantity"}
-	input.Scenario.Invariant.JSONIntegerMinimum.Path = path
-	input.Result.Trials[0].Run.Evaluation.JSONIntegerMinimum.Invariant.Path = append([]string(nil), path...)
+	for _, test := range []struct {
+		path []string
+		want string
+	}{
+		{[]string{"data", "quantity"}, `$["data"]["quantity"]`},
+		{[]string{"data", "Products", "0", "BasketItem", "quantity"}, `$["data"]["Products"]["0"]["BasketItem"]["quantity"]`},
+	} {
+		t.Run(test.want, func(t *testing.T) {
+			input := completedTextInput(engine.RunOutcomePassed, 2)
+			input.Scenario.Invariant.JSONIntegerMinimum.Path = test.path
+			input.Result.Trials[0].Run.Evaluation.JSONIntegerMinimum.Invariant.Path = append([]string(nil), test.path...)
 
-	var output bytes.Buffer
-	if err := report.WriteText(&output, input); err != nil {
-		t.Fatalf("WriteText() error = %v", err)
+			var output bytes.Buffer
+			if err := report.WriteText(&output, input); err != nil {
+				t.Fatalf("WriteText() error = %v", err)
+			}
+			assertContains(t, output.String(),
+				"Expected        "+test.want+" >= 0",
+				"Observed        "+test.want+" = 2",
+			)
+		})
 	}
-	assertContains(t, output.String(),
-		"Expected        $[\"data\"][\"quantity\"] >= 0",
-		"Observed        $[\"data\"][\"quantity\"] = 2",
-	)
 }
 
 func TestWriteTextCompactShowsOneViolationDespiteDistinctEvidence(t *testing.T) {

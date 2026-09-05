@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -16,10 +17,12 @@ type Invariant struct {
 	MaximumSuccessfulAttempts *MaximumSuccessfulAttemptsInvariant
 }
 
-// JSONIntegerMinimumInvariant requires the JSON integer at one object path to
+// JSONIntegerMinimumInvariant requires the JSON integer at one path to
 // be greater than or equal to Minimum.
 type JSONIntegerMinimumInvariant struct {
-	Name    string
+	Name string
+	// Path entries select literal object keys or zero-based array indexes.
+	// Indexes use canonical decimal strings, keeping numeric object keys valid.
 	Path    []string
 	Minimum int64
 }
@@ -67,49 +70,26 @@ func EvaluateJSONIntegerMinimum(
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(document))
-	var object map[string]json.RawMessage
-	if err := decoder.Decode(&object); err != nil {
-		return JSONIntegerMinimumEvaluation{}, fmt.Errorf("decode observation as a JSON object: %w", err)
-	}
-	if object == nil {
-		return JSONIntegerMinimumEvaluation{}, errors.New("decode observation as a JSON object: got null")
+	var rawValue json.RawMessage
+	if err := decoder.Decode(&rawValue); err != nil {
+		return JSONIntegerMinimumEvaluation{}, fmt.Errorf("decode observation as JSON: %w", err)
 	}
 
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return JSONIntegerMinimumEvaluation{}, errors.New("decode observation as a JSON object: multiple JSON values")
+			return JSONIntegerMinimumEvaluation{}, errors.New("decode observation as JSON: multiple JSON values")
 		}
 		return JSONIntegerMinimumEvaluation{}, fmt.Errorf("decode trailing observation data: %w", err)
 	}
 
 	path := formatJSONPath(invariant.Path)
-	var rawValue json.RawMessage
 	for index, segment := range invariant.Path {
-		var ok bool
-		rawValue, ok = object[segment]
-		if !ok {
-			return JSONIntegerMinimumEvaluation{}, fmt.Errorf("observation path %s is missing", formatJSONPath(invariant.Path[:index+1]))
+		var err error
+		rawValue, err = jsonPathChild(rawValue, segment, formatJSONPath(invariant.Path[:index]))
+		if err != nil {
+			return JSONIntegerMinimumEvaluation{}, err
 		}
-		if index == len(invariant.Path)-1 {
-			break
-		}
-
-		var nested map[string]json.RawMessage
-		if err := json.Unmarshal(rawValue, &nested); err != nil {
-			return JSONIntegerMinimumEvaluation{}, fmt.Errorf(
-				"observation path %s must contain a JSON object: %w",
-				formatJSONPath(invariant.Path[:index+1]),
-				err,
-			)
-		}
-		if nested == nil {
-			return JSONIntegerMinimumEvaluation{}, fmt.Errorf(
-				"observation path %s must contain a JSON object, not null",
-				formatJSONPath(invariant.Path[:index+1]),
-			)
-		}
-		object = nested
 	}
 
 	var observed *int64
@@ -129,6 +109,42 @@ func EvaluateJSONIntegerMinimum(
 		Observed:  *observed,
 		Violated:  *observed < invariant.Minimum,
 	}, nil
+}
+
+// jsonPathChild interprets each segment using the observed container type.
+// RawMessage preserves exact integer values without a float64 conversion.
+func jsonPathChild(raw json.RawMessage, segment, parentPath string) (json.RawMessage, error) {
+	raw = bytes.TrimSpace(raw)
+	path := fmt.Sprintf("%s[%q]", parentPath, segment)
+	switch {
+	case len(raw) > 0 && raw[0] == '{':
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &object); err != nil {
+			return nil, fmt.Errorf("decode observation path %s as a JSON object: %w", parentPath, err)
+		}
+		value, ok := object[segment]
+		if !ok {
+			return nil, fmt.Errorf("observation path %s is missing", path)
+		}
+		return value, nil
+	case len(raw) > 0 && raw[0] == '[':
+		index, err := strconv.Atoi(segment)
+		if err != nil || index < 0 || strconv.Itoa(index) != segment {
+			return nil, fmt.Errorf("observation path %s needs a non-negative base-10 array index, got %q", parentPath, segment)
+		}
+		var array []json.RawMessage
+		if err := json.Unmarshal(raw, &array); err != nil {
+			return nil, fmt.Errorf("decode observation path %s as a JSON array: %w", parentPath, err)
+		}
+		if index >= len(array) {
+			return nil, fmt.Errorf("observation path %s is out of range: array has %d elements", path, len(array))
+		}
+		return array[index], nil
+	case bytes.Equal(raw, []byte("null")):
+		return nil, fmt.Errorf("observation path %s must contain a JSON object or array, not null", parentPath)
+	default:
+		return nil, fmt.Errorf("observation path %s must contain a JSON object or array", parentPath)
+	}
 }
 
 // EvaluateMaximumSuccessfulAttempts evaluates a completed operation history.

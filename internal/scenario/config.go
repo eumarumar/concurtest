@@ -118,11 +118,11 @@ type executionConfig struct {
 }
 
 type invariantConfig struct {
-	Name                      strictString     `yaml:"name"`
-	JSONIntegerPath           strictStringList `yaml:"json_integer_path"`
-	Minimum                   *strictInt64     `yaml:"minimum"`
-	MaximumSuccessfulAttempts *strictInt       `yaml:"maximum_successful_attempts"`
-	SuccessfulStatusCodes     strictIntList    `yaml:"successful_status_codes"`
+	Name                      strictString   `yaml:"name"`
+	JSONIntegerPath           jsonPathConfig `yaml:"json_integer_path"`
+	Minimum                   *strictInt64   `yaml:"minimum"`
+	MaximumSuccessfulAttempts *strictInt     `yaml:"maximum_successful_attempts"`
+	SuccessfulStatusCodes     strictIntList  `yaml:"successful_status_codes"`
 }
 
 func (config *invariantConfig) UnmarshalYAML(node *yaml.Node) error {
@@ -225,20 +225,35 @@ type strictIntList struct {
 	values     []strictInt
 }
 
-type strictStringList struct {
+type jsonPathConfig struct {
 	configured bool
-	values     []strictString
+	values     []string
 }
 
-func (value *strictStringList) UnmarshalYAML(node *yaml.Node) error {
+func (value *jsonPathConfig) UnmarshalYAML(node *yaml.Node) error {
 	if node.Kind != yaml.SequenceNode {
-		return errors.New("must be a list of strings")
+		return errors.New("json_integer_path must be a list of object keys or non-negative integer indexes")
 	}
 	value.configured = true
-	value.values = make([]strictString, len(node.Content))
+	value.values = make([]string, len(node.Content))
 	for index, item := range node.Content {
-		if err := item.Decode(&value.values[index]); err != nil {
-			return fmt.Errorf("entry %d must be a string: %w", index+1, err)
+		if item.Kind != yaml.ScalarNode {
+			return fmt.Errorf("json_integer_path entry %d must be an object key or a non-negative integer index", index+1)
+		}
+		switch item.Tag {
+		case "!!str":
+			value.values[index] = item.Value
+		case "!!int":
+			var parsed strictInt
+			if err := item.Decode(&parsed); err != nil {
+				return fmt.Errorf("json_integer_path entry %d: %w", index+1, err)
+			}
+			if parsed < 0 {
+				return fmt.Errorf("json_integer_path entry %d must not be negative", index+1)
+			}
+			value.values[index] = strconv.Itoa(int(parsed))
+		default:
+			return fmt.Errorf("json_integer_path entry %d must be an object key or a non-negative integer index", index+1)
 		}
 	}
 	return nil
@@ -423,10 +438,10 @@ func (config invariantConfig) invariant(name string) (engine.Invariant, error) {
 		}
 		path := make([]string, len(config.JSONIntegerPath.values))
 		for index, segment := range config.JSONIntegerPath.values {
-			if strings.TrimSpace(string(segment)) == "" {
+			if strings.TrimSpace(segment) == "" {
 				return engine.Invariant{}, fmt.Errorf("invariant.json_integer_path entry %d must not be empty", index+1)
 			}
-			path[index] = string(segment)
+			path[index] = segment
 		}
 		definition := engine.JSONIntegerMinimumInvariant{
 			Name:    name,

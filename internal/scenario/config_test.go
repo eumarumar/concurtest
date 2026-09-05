@@ -88,6 +88,34 @@ func TestDecodeValidScenario(t *testing.T) {
 	}
 }
 
+func TestDecodeAllowsArrayIndexesInJSONIntegerPath(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{
+		"[data, Products, 0, BasketItem, quantity]",
+		"[data, Products, '0', BasketItem, quantity]",
+	} {
+		t.Run(path, func(t *testing.T) {
+			document := strings.Replace(validYAML("http://example.test"), "[data, stock]", path, 1)
+			definition, err := scenario.Decode(strings.NewReader(document))
+			if err != nil {
+				t.Fatal(err)
+			}
+			invariant := definition.Scenario.Invariant.JSONIntegerMinimum
+			if got := strings.Join(invariant.Path, "/"); got != "data/Products/0/BasketItem/quantity" {
+				t.Fatalf("path = %q", got)
+			}
+			evaluation, err := engine.EvaluateJSONIntegerMinimum(*invariant, []byte(`{"data":{"Products":[{"BasketItem":{"quantity":-1}}]}}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if evaluation.Observed != -1 || !evaluation.Violated {
+				t.Fatalf("evaluation = %#v, want violation with quantity -1", evaluation)
+			}
+		})
+	}
+}
+
 func TestDecodeAllowsOmittedSetup(t *testing.T) {
 	t.Parallel()
 
@@ -279,7 +307,14 @@ func TestDecodeRejectsInvalidScenario(t *testing.T) {
 		{name: "empty invariant path", document: strings.Replace(valid, "json_integer_path: [data, stock]", "json_integer_path: []", 1)},
 		{name: "null invariant path", document: strings.Replace(valid, "json_integer_path: [data, stock]", "json_integer_path: null", 1)},
 		{name: "scalar invariant path", document: strings.Replace(valid, "json_integer_path: [data, stock]", "json_integer_path: stock", 1)},
-		{name: "non-string invariant path entry", document: strings.Replace(valid, "json_integer_path: [data, stock]", "json_integer_path: [data, 1]", 1)},
+		{name: "negative invariant path index", document: strings.Replace(valid, "json_integer_path: [data, stock]", "json_integer_path: [data, -1]", 1)},
+		{name: "fractional invariant path index", document: strings.Replace(valid, "json_integer_path: [data, stock]", "json_integer_path: [data, 1.5]", 1)},
+		{name: "overflowing invariant path index", document: strings.Replace(valid, "json_integer_path: [data, stock]", "json_integer_path: [data, 99999999999999999999999]", 1)},
+		{name: "hexadecimal invariant path index", document: strings.Replace(valid, "json_integer_path: [data, stock]", "json_integer_path: [data, 0x10]", 1)},
+		{name: "boolean invariant path entry", document: strings.Replace(valid, "json_integer_path: [data, stock]", "json_integer_path: [data, true]", 1)},
+		{name: "null invariant path entry", document: strings.Replace(valid, "json_integer_path: [data, stock]", "json_integer_path: [data, null]", 1)},
+		{name: "mapping invariant path entry", document: strings.Replace(valid, "json_integer_path: [data, stock]", "json_integer_path: [data, {index: 0}]", 1)},
+		{name: "list invariant path entry", document: strings.Replace(valid, "json_integer_path: [data, stock]", "json_integer_path: [data, [0]]", 1)},
 		{name: "empty invariant path entry", document: strings.Replace(valid, "json_integer_path: [data, stock]", "json_integer_path: [data, ' ']", 1)},
 		{name: "old invariant field", document: strings.Replace(valid, "json_integer_path: [data, stock]", "json_integer_field: stock", 1)},
 		{name: "missing minimum", document: strings.Replace(valid, "  minimum: 0\n", "", 1)},

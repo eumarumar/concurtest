@@ -590,6 +590,66 @@ func TestRunAppliesExecutionOverridesAndDisablesReduction(t *testing.T) {
 	}
 }
 
+func TestRunEvaluatesJSONIntegerPathThroughArray(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name        string
+		observation string
+		exitCode    int
+		status      string
+	}{
+		{"passed", `{"data":{"Products":[{"BasketItem":{"quantity":2}}]}}`, 0, "passed"},
+		{"violated", `{"data":{"Products":[{"BasketItem":{"quantity":-1}}]}}`, 1, "violated"},
+		{"empty array", `{"data":{"Products":[]}}`, 2, "errored"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				switch request.URL.Path {
+				case "/purchase":
+					writer.WriteHeader(http.StatusCreated)
+				case "/state":
+					_, _ = writer.Write([]byte(test.observation))
+				default:
+					http.NotFound(writer, request)
+				}
+			}))
+			t.Cleanup(server.Close)
+			yaml := strings.Replace(scenarioYAML(server.URL, "1s", 1, 1, false),
+				"json_integer_path: [stock]", "json_integer_path: [data, Products, 0, BasketItem, quantity]", 1)
+			path := writeScenarioFile(t, yaml)
+			var stdout, stderr bytes.Buffer
+			if code := app.Run(context.Background(), []string{"run", "--format", "json", path}, &stdout, &stderr); code != test.exitCode {
+				t.Fatalf("Run() exit code = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, test.exitCode, stdout.String(), stderr.String())
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+			var document struct {
+				Status   string `json:"status"`
+				Scenario struct {
+					Invariant struct {
+						Path []string `json:"path"`
+					} `json:"invariant"`
+				} `json:"scenario"`
+			}
+			if err := json.Unmarshal(stdout.Bytes(), &document); err != nil {
+				t.Fatal(err)
+			}
+			if document.Status != test.status {
+				t.Errorf("status = %q, want %q", document.Status, test.status)
+			}
+			if got := strings.Join(document.Scenario.Invariant.Path, "/"); got != "data/Products/0/BasketItem/quantity" {
+				t.Errorf("reported path = %q", got)
+			}
+			if test.status == "errored" && !strings.Contains(stdout.String(), "out of range") {
+				t.Fatalf("missing array element was not explained:\n%s", stdout.String())
+			}
+		})
+	}
+}
+
 func TestRunRejectsInvalidExecutionOverridesBeforeRequests(t *testing.T) {
 	t.Parallel()
 

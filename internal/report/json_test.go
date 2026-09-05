@@ -30,7 +30,7 @@ func TestWriteJSONProducesSchemaValidCompleteSafeEvidence(t *testing.T) {
 	input.ConfiguredTrials = 1
 	input.Scenario.Operation.Request.Body = []byte("request-body-secret")
 	input.Result.Trials[0].Run.History.Attempts[0].Execution.Request.Body = []byte("request-body-secret")
-	path := []string{"data", "quantity"}
+	path := []string{"data", "Products", "0", "BasketItem", "quantity"}
 	input.Scenario.Invariant.JSONIntegerMinimum.Path = path
 	input.Result.Trials[0].Run.Evaluation.JSONIntegerMinimum.Invariant.Path = append([]string(nil), path...)
 
@@ -55,7 +55,7 @@ func TestWriteJSONProducesSchemaValidCompleteSafeEvidence(t *testing.T) {
 		t.Fatalf("report identity = %v/%v", document["schema_version"], document["report_type"])
 	}
 	invariant := document["scenario"].(map[string]any)["invariant"].(map[string]any)
-	if strings.Join(anyStrings(invariant["path"].([]any)), ".") != "data.quantity" {
+	if strings.Join(anyStrings(invariant["path"].([]any)), ".") != "data.Products.0.BasketItem.quantity" {
 		t.Fatalf("scenario invariant path = %#v", invariant["path"])
 	}
 	if _, exists := invariant["field"]; exists {

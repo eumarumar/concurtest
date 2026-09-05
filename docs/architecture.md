@@ -195,9 +195,18 @@ one seat cannot have multiple confirmed owners
 Invariant evaluation should be separate from transport execution.
 
 A scenario continues to declare exactly one invariant. The current concrete
-forms are a JSON integer minimum at a configured object path and a maximum
+forms are a JSON integer minimum at a configured path and a maximum
 number of successful HTTP attempts. They are represented explicitly rather
 than through an expression language or plugin system.
+
+JSON integer paths traverse objects and arrays. YAML accepts string keys and
+non-negative integer indexes, normalizing indexes to decimal strings in the
+engine and JSON report. Each entry selects a literal key on an object or a
+zero-based index on an array. Array indexes use canonical decimal strings;
+numeric object keys remain valid. Traversal preserves exact JSON integer values
+and reports missing keys, invalid indexes, and unexpected value types as
+evaluation errors. Text reports retain the same quoted-segment path notation
+for both keys and indexes.
 
 ### Failure
 
