@@ -175,7 +175,15 @@ An observation reads externally visible state from the target system. It is
 required when the configured invariant evaluates state and optional when the
 invariant evaluates execution history.
 
-Initially this may be another HTTP request.
+Initially this may be another HTTP request. A JSON integer change invariant
+uses the same observation request after setup and before operations, then again
+after operations. Baseline capture is synchronous and must succeed, return a
+complete body, and contain a valid integer before operations start. Its execution
+is retained in partial run evidence even if a later stage fails. Every trial and
+reduction candidate captures its own baseline; no baseline is shared across runs.
+Evaluation checks the exact signed 64-bit difference between final and baseline,
+returning an error on subtraction overflow. It measures net change, so unrelated
+or offsetting writes can affect the result.
 
 Future observers may include databases, queues, caches, or custom plugins.
 
@@ -197,10 +205,11 @@ Invariant evaluation should be separate from transport execution.
 A scenario continues to declare exactly one invariant. The current concrete
 forms are a JSON integer constraint at a configured path and a maximum
 number of successful HTTP attempts. JSON integer constraints support an inclusive
-minimum, an inclusive maximum, both bounds, or exact equality. Equality cannot
-be combined with bounds, and a minimum must not exceed its maximum. The concrete
-forms are represented explicitly rather than through an expression language or
-plugin system.
+minimum, an inclusive maximum, both bounds, exact equality, or an exact change
+from a baseline. Equality cannot be combined with bounds; change cannot be
+combined with any other constraint. A minimum must not exceed its maximum. The
+concrete forms are represented explicitly rather than through an expression
+language or plugin system.
 
 JSON integer paths traverse objects and arrays. YAML accepts string keys and
 non-negative integer indexes, normalizing indexes to decimal strings in the

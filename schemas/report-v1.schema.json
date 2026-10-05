@@ -59,11 +59,13 @@
         },
         "minimum": { "type": "integer" },
         "maximum": { "type": "integer" },
-        "equals": { "type": "integer" }
+        "equals": { "type": "integer" },
+        "change": { "type": "integer" }
       },
       "oneOf": [
-        { "required": ["equals"], "not": { "anyOf": [{ "required": ["minimum"] }, { "required": ["maximum"] }] } },
-        { "anyOf": [{ "required": ["minimum"] }, { "required": ["maximum"] }], "not": { "required": ["equals"] } }
+        { "required": ["change"], "not": { "anyOf": [{ "required": ["minimum"] }, { "required": ["maximum"] }, { "required": ["equals"] }] } },
+        { "required": ["equals"], "not": { "anyOf": [{ "required": ["minimum"] }, { "required": ["maximum"] }, { "required": ["change"] }] } },
+        { "anyOf": [{ "required": ["minimum"] }, { "required": ["maximum"] }], "not": { "anyOf": [{ "required": ["equals"] }, { "required": ["change"] }] } }
       ]
     },
     "maximum_successful_attempts_definition": {
@@ -240,8 +242,11 @@
       "properties": {
         "type": { "const": "json_integer" },
         "observed": { "type": "integer" },
+        "baseline": { "type": "integer" },
+        "change": { "type": "integer" },
         "violated": { "type": "boolean" }
-      }
+      },
+      "dependentRequired": { "baseline": ["change"], "change": ["baseline"] }
     },
     "maximum_successful_attempts_evaluation": {
       "type": "object",
@@ -283,7 +288,7 @@
         "evidence": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["outcome", "timing", "setup", "history", "observation", "invariant_evaluation"],
+          "required": ["outcome", "timing", "setup", "history", "baseline_observation", "observation", "invariant_evaluation"],
           "properties": {
             "outcome": { "type": ["string", "null"], "enum": ["passed", "violated", "inconclusive", null] },
             "timing": { "$ref": "#/$defs/nullable_timing" },
@@ -304,6 +309,12 @@
                   "items": { "$ref": "#/$defs/attempt" }
                 }
               }
+            },
+            "baseline_observation": {
+              "oneOf": [
+                { "$ref": "#/$defs/execution" },
+                { "type": "null" }
+              ]
             },
             "observation": {
               "oneOf": [

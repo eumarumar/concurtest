@@ -80,6 +80,8 @@ func TestReportSchemaRejectsInvalidIntegerConstraints(t *testing.T) {
 		{"equals": 0, "minimum": 0, "maximum": 0},
 		{"maximum": nil}, {"equals": nil}, {"maximum": "999"}, {"equals": 1.5},
 		{"minimum": 0, "unknown": 1},
+		{"change": -1, "minimum": 0}, {"change": -1, "maximum": 10}, {"change": -1, "equals": 9},
+		{"change": nil}, {"change": "-1"}, {"change": 1.5},
 	} {
 		invariant := map[string]any{"type": "json_integer", "name": "stock check", "path": []any{"stock"}}
 		for key, value := range constraints {

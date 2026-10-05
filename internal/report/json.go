@@ -81,6 +81,7 @@ type jsonIntegerDefinitionJSON struct {
 	Minimum *int64   `json:"minimum,omitempty"`
 	Maximum *int64   `json:"maximum,omitempty"`
 	Equals  *int64   `json:"equals,omitempty"`
+	Change  *int64   `json:"change,omitempty"`
 }
 
 type maximumSuccessfulAttemptsDefinitionJSON struct {
@@ -135,6 +136,8 @@ type historyJSON struct {
 type jsonIntegerEvaluationJSON struct {
 	Type     string `json:"type"`
 	Observed int64  `json:"observed"`
+	Baseline *int64 `json:"baseline,omitempty"`
+	Change   *int64 `json:"change,omitempty"`
 	Violated bool   `json:"violated"`
 }
 
@@ -149,6 +152,7 @@ type runEvidenceJSON struct {
 	Outcome             *string        `json:"outcome"`
 	Timing              *timingJSON    `json:"timing"`
 	Setup               *executionJSON `json:"setup"`
+	BaselineObservation *executionJSON `json:"baseline_observation"`
 	History             historyJSON    `json:"history"`
 	Observation         *executionJSON `json:"observation"`
 	InvariantEvaluation any            `json:"invariant_evaluation"`
@@ -403,6 +407,7 @@ func invariantDefinition(invariant engine.Invariant) any {
 			Type: "json_integer", Name: definition.Name,
 			Path: append([]string{}, definition.Path...), Minimum: definition.Minimum,
 			Maximum: definition.Maximum, Equals: definition.Equals,
+			Change: definition.Change,
 		}
 	}
 	if definition := invariant.MaximumSuccessfulAttempts; definition != nil {
@@ -450,6 +455,7 @@ func runResultJSON(result engine.RunResult) runEvidenceJSON {
 		Outcome:             outcome,
 		Timing:              timing(result.StartedAt, result.CompletedAt),
 		Setup:               executionResultJSON(result.Setup),
+		BaselineObservation: executionResultJSON(result.BaselineObservation),
 		History:             historyJSON{Timing: timing(result.History.StartedAt, result.History.CompletedAt), Attempts: attempts},
 		Observation:         executionResultJSON(result.Observation),
 		InvariantEvaluation: invariantEvaluation(result.Evaluation),
@@ -501,6 +507,7 @@ func invariantEvaluation(evaluation *engine.InvariantEvaluation) any {
 	if concrete := evaluation.JSONInteger; concrete != nil {
 		return jsonIntegerEvaluationJSON{
 			Type: "json_integer", Observed: concrete.Observed, Violated: concrete.Violated,
+			Baseline: concrete.Baseline, Change: concrete.Change,
 		}
 	}
 	if concrete := evaluation.MaximumSuccessfulAttempts; concrete != nil {

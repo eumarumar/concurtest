@@ -42,10 +42,13 @@ type RunResult struct {
 	StartedAt   time.Time
 	CompletedAt time.Time
 	Setup       *HTTPExecution
-	History     History
-	Observation *HTTPExecution
-	Evaluation  *InvariantEvaluation
-	Outcome     RunOutcome
+	// BaselineObservation is captured after setup and before operations only
+	// for a change invariant. Each trial and reduction candidate captures its own.
+	BaselineObservation *HTTPExecution
+	History             History
+	Observation         *HTTPExecution
+	Evaluation          *InvariantEvaluation
+	Outcome             RunOutcome
 }
 
 // Duration reports the elapsed time of the scenario run.
@@ -76,6 +79,23 @@ func Run(
 		if err := requireSuccessfulStage("setup", setup); err != nil {
 			return result, err
 		}
+	}
+
+	var baseline *int64
+	if definition := scenario.Invariant.JSONInteger; definition != nil && definition.Change != nil {
+		observation := ExecuteHTTP(ctx, client, *scenario.Observation)
+		result.BaselineObservation = &observation
+		if err := requireSuccessfulStage("baseline observation", observation); err != nil {
+			return result, err
+		}
+		if observation.Response.BodyTruncated {
+			return result, failure.New(failure.CodeResponseTruncated, "observe baseline state: response body was truncated")
+		}
+		value, err := readJSONInteger(definition.Path, observation.Response.Body)
+		if err != nil {
+			return result, failure.Wrap(failure.CodeInvariantEvaluationFailed, "read baseline observation", err)
+		}
+		baseline = &value
 	}
 
 	history, err := ExecuteConcurrent(
@@ -125,10 +145,13 @@ func Run(
 			return result, failure.New(failure.CodeResponseTruncated, "observe scenario state: response body was truncated")
 		}
 
-		evaluation, err := EvaluateJSONInteger(
-			*scenario.Invariant.JSONInteger,
-			observation.Response.Body,
-		)
+		var evaluation JSONIntegerEvaluation
+		var err error
+		if baseline != nil {
+			evaluation, err = EvaluateJSONIntegerChange(*scenario.Invariant.JSONInteger, *baseline, observation.Response.Body)
+		} else {
+			evaluation, err = EvaluateJSONInteger(*scenario.Invariant.JSONInteger, observation.Response.Body)
+		}
 		if err != nil {
 			return result, failure.Wrap(failure.CodeInvariantEvaluationFailed, "evaluate scenario invariant", err)
 		}
@@ -172,7 +195,7 @@ func validateRunInput(ctx context.Context, client *http.Client, scenario Scenari
 func requireSuccessfulStage(stage string, execution HTTPExecution) error {
 	if execution.Err != nil {
 		code := failure.CodeSetupFailed
-		if stage == "observation" {
+		if stage == "observation" || stage == "baseline observation" {
 			code = failure.CodeObservationFailed
 		}
 		return failure.Wrap(code, stage+" scenario request", execution.Err)

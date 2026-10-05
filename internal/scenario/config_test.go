@@ -462,3 +462,45 @@ func TestDecodeRejectsInvalidJSONIntegerConstraints(t *testing.T) {
 		})
 	}
 }
+
+func TestDecodeJSONIntegerChange(t *testing.T) {
+	t.Parallel()
+	for _, value := range []int64{-1, 0, 1, -9223372036854775808, 9223372036854775807} {
+		t.Run(fmt.Sprint(value), func(t *testing.T) {
+			document := strings.Replace(validYAML("http://example.test"), "minimum: 0", fmt.Sprintf("change: %d", value), 1)
+			definition, err := scenario.Decode(strings.NewReader(document))
+			if err != nil {
+				t.Fatal(err)
+			}
+			invariant := definition.Scenario.Invariant.JSONInteger
+			if invariant == nil || invariant.Change == nil || *invariant.Change != value || invariant.Minimum != nil || invariant.Maximum != nil || invariant.Equals != nil {
+				t.Fatalf("unexpected invariant: %#v", invariant)
+			}
+		})
+	}
+}
+
+func TestDecodeRejectsInvalidJSONIntegerChange(t *testing.T) {
+	t.Parallel()
+	valid := strings.Replace(validYAML("http://example.test"), "minimum: 0", "change: -1", 1)
+	for _, field := range []string{"minimum: 0", "maximum: 999", "equals: 999", "maximum_successful_attempts: 1", "successful_status_codes: [201]"} {
+		t.Run("mixed "+field, func(t *testing.T) {
+			if _, err := scenario.Decode(strings.NewReader(valid + "  " + field + "\n")); err == nil {
+				t.Fatal("accepted mixed change invariant")
+			}
+		})
+	}
+	for _, value := range []string{"null", "1.5", "'1'", "true", "[]", "{}", "9223372036854775808", "-9223372036854775809", "0x10", "-1\n  change: -1"} {
+		t.Run(value, func(t *testing.T) {
+			document := strings.Replace(valid, "change: -1", "change: "+value, 1)
+			if _, err := scenario.Decode(strings.NewReader(document)); err == nil {
+				t.Fatal("accepted invalid change value")
+			}
+		})
+	}
+	for _, remove := range []string{"  json_integer_path: [data, stock]\n", "observation:\n  method: GET\n  path: /state\n\n"} {
+		if _, err := scenario.Decode(strings.NewReader(strings.Replace(valid, remove, "", 1))); err == nil {
+			t.Fatalf("accepted missing required field: %s", remove)
+		}
+	}
+}

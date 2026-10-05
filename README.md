@@ -186,6 +186,7 @@ Use `json_integer_path` to check an observed integer. Bounds are inclusive:
 | `maximum: 999` | value <= 999 |
 | `minimum: 10` and `maximum: 20` | 10 <= value <= 20 |
 | `equals: 999` | value == 999 |
+| `change: -1` | final value - baseline value == -1 |
 
 For a checkout that must decrement stock exactly once:
 
@@ -197,13 +198,38 @@ invariant:
 ```
 
 An observation request is required for these checks. Define at least one of
-`minimum`, `maximum`, or `equals`. Do not combine `equals` with either bound,
-and keep `minimum` less than or equal to `maximum`. All constraint values must
+`minimum`, `maximum`, `equals`, or `change`. Do not combine `equals` with either
+bound, and keep `minimum` less than or equal to `maximum`. All constraint values must
 be integers representable as signed 64-bit values; zero and negative values are
 valid. Each scenario still declares exactly one invariant.
 
 In JSON reports, these checks use type `json_integer`; their definition includes
 only the configured constraints. The evaluation records `observed` and `violated`.
+
+To check a decrement without assuming the starting stock:
+
+```yaml
+invariant:
+  name: stock must decrease exactly once
+  json_integer_path: [data, quantity]
+  change: -1
+```
+
+With `change`, ConcurTest sends the configured observation request after setup
+and before operations, then again after all operations complete. It checks
+`final - baseline == change`. Each trial, including each reduction trial, reads
+its own baseline. `change` must appear alone; it cannot be combined with
+`minimum`, `maximum`, or `equals`. Positive changes and zero are valid.
+
+A failed baseline stops the trial before operations run. Invalid, missing, or
+truncated observations produce an error. Values and their difference must fit
+in a signed 64-bit integer; an out-of-range difference produces an error instead
+of wrapping. This checks the net change, so unrelated writes or offsetting
+changes can affect the result.
+
+Text reports show the baseline, final value, and observed change. JSON trial
+evidence includes `baseline_observation` (null for other checks); change
+evaluations add `baseline` and `change`. Schema version remains `1.0.0`.
 
 
 ## Detect a failure hidden by final state

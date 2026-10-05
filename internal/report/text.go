@@ -463,6 +463,12 @@ func firstTrialWithStatus(trials []engine.TrialResult, status engine.TrialStatus
 }
 
 func writeCompactViolation(writer io.Writer, scenario engine.Scenario, trial engine.TrialResult) {
+	if trial.Run.BaselineObservation != nil {
+		fmt.Fprintln(writer, "    Baseline observation")
+		execution := trial.Run.BaselineObservation
+		fmt.Fprintf(writer, "      %s %s · %s\n", execution.Request.Method, requestTarget(execution.Request.URL), executionStatus(execution))
+		writeCompactExecutionDetails(writer, execution, "      ")
+	}
 	attempts := trial.Run.History.Attempts
 	description := "attempt"
 	if scenario.Invariant.MaximumSuccessfulAttempts != nil && trial.Run.Evaluation != nil && trial.Run.Evaluation.MaximumSuccessfulAttempts != nil {
@@ -647,6 +653,14 @@ func writeTrialEvidence(writer io.Writer, style textStyle, scenario engine.Scena
 	}
 	writeInvariant(writer, style, scenario.Invariant, trial.Run.Evaluation)
 	writeOptionalExecution(writer, "Setup", trial.Run.Setup)
+	if scenario.Invariant.JSONInteger != nil && scenario.Invariant.JSONInteger.Change != nil {
+		fmt.Fprintln(writer, "\n  Baseline observation")
+		if trial.Run.BaselineObservation == nil {
+			fmt.Fprintln(writer, "    Not reached.")
+		} else {
+			writeExecution(writer, trial.Run.BaselineObservation, "    ")
+		}
+	}
 	writeAttempts(writer, trial.Run.History)
 	writeObservation(writer, scenario.Observation, trial.Run.Observation)
 }
@@ -694,6 +708,8 @@ func writeInvariantLines(writer io.Writer, invariant engine.Invariant, evaluatio
 		path := formatJSONPath(definition.Path)
 		fmt.Fprintf(writer, "%s%s\n", indent, definition.Name)
 		switch {
+		case definition.Change != nil:
+			fmt.Fprintf(writer, "%sExpected        Change in %s == %d (final - baseline)\n", indent, path, *definition.Change)
 		case definition.Equals != nil:
 			fmt.Fprintf(writer, "%sExpected        %s == %d\n", indent, path, *definition.Equals)
 		case definition.Minimum != nil && definition.Maximum != nil:
@@ -708,6 +724,10 @@ func writeInvariantLines(writer io.Writer, invariant engine.Invariant, evaluatio
 			return
 		}
 		fmt.Fprintf(writer, "%sObserved        %s = %d\n", indent, path, evaluation.JSONInteger.Observed)
+		if evaluation.JSONInteger.Baseline != nil && evaluation.JSONInteger.Change != nil {
+			fmt.Fprintf(writer, "%sBaseline        %s = %d\n", indent, path, *evaluation.JSONInteger.Baseline)
+			fmt.Fprintf(writer, "%sChange          %d\n", indent, *evaluation.JSONInteger.Change)
+		}
 	case invariant.MaximumSuccessfulAttempts != nil:
 		definition := invariant.MaximumSuccessfulAttempts
 		fmt.Fprintf(writer, "%s%s\n", indent, definition.Name)

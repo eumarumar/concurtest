@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,7 +19,7 @@ type Invariant struct {
 }
 
 // JSONIntegerInvariant constrains the JSON integer at one path. Bounds are
-// inclusive; Equals is mutually exclusive with Minimum and Maximum.
+// inclusive; Equals and Change are each exclusive with other constraints.
 type JSONIntegerInvariant struct {
 	Name string
 	// Path entries select literal object keys or zero-based array indexes.
@@ -28,13 +29,18 @@ type JSONIntegerInvariant struct {
 	Minimum *int64
 	Maximum *int64
 	Equals  *int64
+	// Change requires final minus baseline to equal this value.
+	Change *int64
 }
 
 // JSONIntegerEvaluation records the value observed for one JSON integer invariant.
 type JSONIntegerEvaluation struct {
 	Invariant JSONIntegerInvariant
 	Observed  int64
-	Violated  bool
+	// Baseline and Change are populated only for change invariants.
+	Baseline *int64
+	Change   *int64
+	Violated bool
 }
 
 // MaximumSuccessfulAttemptsInvariant limits operation responses whose HTTP
@@ -67,52 +73,89 @@ func EvaluateJSONInteger(
 	invariant JSONIntegerInvariant,
 	document []byte,
 ) (JSONIntegerEvaluation, error) {
+	return evaluateJSONInteger(invariant, document, nil)
+}
+
+// EvaluateJSONIntegerChange compares the final integer with a previously read
+// baseline. The invariant must declare Change; subtraction is checked for overflow.
+func EvaluateJSONIntegerChange(invariant JSONIntegerInvariant, baseline int64, document []byte) (JSONIntegerEvaluation, error) {
+	if invariant.Change == nil {
+		return JSONIntegerEvaluation{}, errors.New("JSON integer change invariant requires change")
+	}
+	return evaluateJSONInteger(invariant, document, &baseline)
+}
+
+func evaluateJSONInteger(invariant JSONIntegerInvariant, document []byte, baseline *int64) (JSONIntegerEvaluation, error) {
 	if err := validateJSONIntegerInvariant(invariant); err != nil {
 		return JSONIntegerEvaluation{}, err
 	}
 
+	if invariant.Change != nil && baseline == nil {
+		return JSONIntegerEvaluation{}, errors.New("JSON integer change requires a baseline observation")
+	}
+	observed, err := readJSONInteger(invariant.Path, document)
+	if err != nil {
+		return JSONIntegerEvaluation{}, err
+	}
+	result := JSONIntegerEvaluation{
+		Invariant: cloneJSONIntegerInvariant(invariant),
+		Observed:  observed,
+		Violated: (invariant.Minimum != nil && observed < *invariant.Minimum) ||
+			(invariant.Maximum != nil && observed > *invariant.Maximum) ||
+			(invariant.Equals != nil && observed != *invariant.Equals),
+	}
+	if invariant.Change != nil {
+		// Check before subtracting: wrapping int64 arithmetic could falsely pass.
+		if (*baseline > 0 && observed < math.MinInt64+*baseline) ||
+			(*baseline < 0 && observed > math.MaxInt64+*baseline) {
+			return JSONIntegerEvaluation{}, errors.New("observed JSON integer change is not representable as int64")
+		}
+		result.Baseline = new(*baseline)
+		result.Change = new(observed - *baseline)
+		result.Violated = *result.Change != *invariant.Change
+	}
+	return result, nil
+}
+
+// readJSONInteger preserves exact values and is shared by baseline capture and
+// final evaluation. A malformed baseline must stop the run before operations.
+func readJSONInteger(segments []string, document []byte) (int64, error) {
 	decoder := json.NewDecoder(bytes.NewReader(document))
 	var rawValue json.RawMessage
 	if err := decoder.Decode(&rawValue); err != nil {
-		return JSONIntegerEvaluation{}, fmt.Errorf("decode observation as JSON: %w", err)
+		return 0, fmt.Errorf("decode observation as JSON: %w", err)
 	}
 
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return JSONIntegerEvaluation{}, errors.New("decode observation as JSON: multiple JSON values")
+			return 0, errors.New("decode observation as JSON: multiple JSON values")
 		}
-		return JSONIntegerEvaluation{}, fmt.Errorf("decode trailing observation data: %w", err)
+		return 0, fmt.Errorf("decode trailing observation data: %w", err)
 	}
 
-	path := formatJSONPath(invariant.Path)
-	for index, segment := range invariant.Path {
+	path := formatJSONPath(segments)
+	for index, segment := range segments {
 		var err error
-		rawValue, err = jsonPathChild(rawValue, segment, formatJSONPath(invariant.Path[:index]))
+		rawValue, err = jsonPathChild(rawValue, segment, formatJSONPath(segments[:index]))
 		if err != nil {
-			return JSONIntegerEvaluation{}, err
+			return 0, err
 		}
 	}
 
 	var observed *int64
 	if err := json.Unmarshal(rawValue, &observed); err != nil {
-		return JSONIntegerEvaluation{}, fmt.Errorf(
+		return 0, fmt.Errorf(
 			"observation path %s must contain a JSON integer representable as int64: %w",
 			path,
 			err,
 		)
 	}
 	if observed == nil {
-		return JSONIntegerEvaluation{}, fmt.Errorf("observation path %s must contain an integer, not null", path)
+		return 0, fmt.Errorf("observation path %s must contain an integer, not null", path)
 	}
 
-	return JSONIntegerEvaluation{
-		Invariant: cloneJSONIntegerInvariant(invariant),
-		Observed:  *observed,
-		Violated: (invariant.Minimum != nil && *observed < *invariant.Minimum) ||
-			(invariant.Maximum != nil && *observed > *invariant.Maximum) ||
-			(invariant.Equals != nil && *observed != *invariant.Equals),
-	}, nil
+	return *observed, nil
 }
 
 // jsonPathChild interprets each segment using the observed container type.
@@ -194,8 +237,11 @@ func validateJSONIntegerInvariant(invariant JSONIntegerInvariant) error {
 			return fmt.Errorf("evaluate JSON integer invariant: empty path segment %d", index+1)
 		}
 	}
-	if invariant.Minimum == nil && invariant.Maximum == nil && invariant.Equals == nil {
-		return errors.New("JSON integer invariant requires minimum, maximum, or equals")
+	if invariant.Minimum == nil && invariant.Maximum == nil && invariant.Equals == nil && invariant.Change == nil {
+		return errors.New("JSON integer invariant requires minimum, maximum, equals, or change")
+	}
+	if invariant.Change != nil && (invariant.Minimum != nil || invariant.Maximum != nil || invariant.Equals != nil) {
+		return errors.New("JSON integer invariant: change cannot be combined with minimum, maximum, or equals")
 	}
 	if invariant.Equals != nil && (invariant.Minimum != nil || invariant.Maximum != nil) {
 		return errors.New("JSON integer invariant: equals cannot be combined with minimum or maximum")
@@ -287,6 +333,9 @@ func cloneJSONIntegerInvariant(invariant JSONIntegerInvariant) JSONIntegerInvari
 	}
 	if invariant.Equals != nil {
 		invariant.Equals = new(*invariant.Equals)
+	}
+	if invariant.Change != nil {
+		invariant.Change = new(*invariant.Change)
 	}
 	return invariant
 }

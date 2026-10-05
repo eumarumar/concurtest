@@ -3,6 +3,7 @@ package reduction
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -441,5 +442,57 @@ func response(status int, body string) *http.Response {
 		StatusCode: status,
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func TestReduceChangeCapturesBaselineForEveryTrialAndCandidate(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var stock int64
+	setups, observations := 0, 0
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.URL.Path {
+		case "/setup":
+			setups++
+			stock = int64(setups * 1000)
+			return response(http.StatusNoContent, ""), nil
+		case "/operation":
+			stock--
+			return response(http.StatusCreated, ""), nil
+		case "/state":
+			observations++
+			return response(http.StatusOK, fmt.Sprintf(`{"stock":%d}`, stock)), nil
+		default:
+			return nil, fmt.Errorf("unexpected path %s", r.URL.Path)
+		}
+	})}
+	scenario := scenarioWithSetup(4, 4)
+	scenario.Invariant.JSONInteger.Minimum = nil
+	scenario.Invariant.JSONInteger.Change = new(int64(-1))
+	result, err := Reduce(context.Background(), client, scenario, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Selected != (Candidate{Attempts: 2, Concurrency: 2}) || result.SelectedTrials == nil {
+		t.Fatalf("unexpected reduction: %#v", result.Selected)
+	}
+	if setups != 6 || observations != 12 {
+		t.Fatalf("setups %d, observations %d; want 6 and 12", setups, observations)
+	}
+	collections := []*engine.TrialsResult{&result.Baseline, result.SelectedTrials}
+	for group, collection := range collections {
+		for i, trial := range collection.Trials {
+			value := trial.Run.Evaluation.JSONInteger
+			wantBaseline := int64((group*3 + i + 1) * 1000)
+			wantChange := int64(-4)
+			if group == 1 {
+				wantChange = -2
+			}
+			if trial.Run.BaselineObservation == nil || value.Baseline == nil || *value.Baseline != wantBaseline || value.Change == nil || *value.Change != wantChange {
+				t.Fatalf("trial lost fresh baseline/change: %#v", value)
+			}
+		}
 	}
 }
