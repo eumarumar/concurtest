@@ -480,7 +480,7 @@ func writeCompactViolation(writer io.Writer, scenario engine.Scenario, trial eng
 		attempts = filtered
 	}
 	writeCompactAttempts(writer, attempts, description)
-	if scenario.Invariant.JSONIntegerMinimum != nil {
+	if scenario.Invariant.JSONInteger != nil {
 		writeCompactObservation(writer, scenario.Observation, trial.Run.Observation)
 	}
 }
@@ -689,16 +689,25 @@ func writeInvariant(writer io.Writer, style textStyle, invariant engine.Invarian
 
 func writeInvariantLines(writer io.Writer, invariant engine.Invariant, evaluation *engine.InvariantEvaluation, indent string) {
 	switch {
-	case invariant.JSONIntegerMinimum != nil:
-		definition := invariant.JSONIntegerMinimum
+	case invariant.JSONInteger != nil:
+		definition := invariant.JSONInteger
 		path := formatJSONPath(definition.Path)
 		fmt.Fprintf(writer, "%s%s\n", indent, definition.Name)
-		fmt.Fprintf(writer, "%sExpected        %s >= %d\n", indent, path, definition.Minimum)
-		if evaluation == nil || evaluation.JSONIntegerMinimum == nil {
+		switch {
+		case definition.Equals != nil:
+			fmt.Fprintf(writer, "%sExpected        %s == %d\n", indent, path, *definition.Equals)
+		case definition.Minimum != nil && definition.Maximum != nil:
+			fmt.Fprintf(writer, "%sExpected        %d <= %s <= %d\n", indent, *definition.Minimum, path, *definition.Maximum)
+		case definition.Minimum != nil:
+			fmt.Fprintf(writer, "%sExpected        %s >= %d\n", indent, path, *definition.Minimum)
+		case definition.Maximum != nil:
+			fmt.Fprintf(writer, "%sExpected        %s <= %d\n", indent, path, *definition.Maximum)
+		}
+		if evaluation == nil || evaluation.JSONInteger == nil {
 			fmt.Fprintf(writer, "%sObserved        Not evaluated\n", indent)
 			return
 		}
-		fmt.Fprintf(writer, "%sObserved        %s = %d\n", indent, path, evaluation.JSONIntegerMinimum.Observed)
+		fmt.Fprintf(writer, "%sObserved        %s = %d\n", indent, path, evaluation.JSONInteger.Observed)
 	case invariant.MaximumSuccessfulAttempts != nil:
 		definition := invariant.MaximumSuccessfulAttempts
 		fmt.Fprintf(writer, "%s%s\n", indent, definition.Name)

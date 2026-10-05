@@ -45,20 +45,26 @@
         "target": { "type": "string", "minLength": 1 }
       }
     },
-    "json_integer_minimum_definition": {
+    "json_integer_definition": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "name", "path", "minimum"],
+      "required": ["type", "name", "path"],
       "properties": {
-        "type": { "const": "json_integer_minimum" },
+        "type": { "const": "json_integer" },
         "name": { "type": "string", "minLength": 1 },
         "path": {
           "type": "array",
           "minItems": 1,
           "items": { "type": "string", "minLength": 1 }
         },
-        "minimum": { "type": "integer" }
-      }
+        "minimum": { "type": "integer" },
+        "maximum": { "type": "integer" },
+        "equals": { "type": "integer" }
+      },
+      "oneOf": [
+        { "required": ["equals"], "not": { "anyOf": [{ "required": ["minimum"] }, { "required": ["maximum"] }] } },
+        { "anyOf": [{ "required": ["minimum"] }, { "required": ["maximum"] }], "not": { "required": ["equals"] } }
+      ]
     },
     "maximum_successful_attempts_definition": {
       "type": "object",
@@ -83,7 +89,7 @@
     },
     "invariant_definition": {
       "oneOf": [
-        { "$ref": "#/$defs/json_integer_minimum_definition" },
+        { "$ref": "#/$defs/json_integer_definition" },
         { "$ref": "#/$defs/maximum_successful_attempts_definition" }
       ]
     },
@@ -227,12 +233,12 @@
         }
       }
     },
-    "json_integer_minimum_evaluation": {
+    "json_integer_evaluation": {
       "type": "object",
       "additionalProperties": false,
       "required": ["type", "observed", "violated"],
       "properties": {
-        "type": { "const": "json_integer_minimum" },
+        "type": { "const": "json_integer" },
         "observed": { "type": "integer" },
         "violated": { "type": "boolean" }
       }
@@ -256,7 +262,7 @@
     },
     "invariant_evaluation": {
       "oneOf": [
-        { "$ref": "#/$defs/json_integer_minimum_evaluation" },
+        { "$ref": "#/$defs/json_integer_evaluation" },
         { "$ref": "#/$defs/maximum_successful_attempts_evaluation" },
         { "type": "null" }
       ]

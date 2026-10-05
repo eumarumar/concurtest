@@ -74,11 +74,13 @@ type scenarioJSON struct {
 	Invariant        any                 `json:"invariant"`
 }
 
-type jsonIntegerMinimumDefinitionJSON struct {
+type jsonIntegerDefinitionJSON struct {
 	Type    string   `json:"type"`
 	Name    string   `json:"name"`
 	Path    []string `json:"path"`
-	Minimum int64    `json:"minimum"`
+	Minimum *int64   `json:"minimum,omitempty"`
+	Maximum *int64   `json:"maximum,omitempty"`
+	Equals  *int64   `json:"equals,omitempty"`
 }
 
 type maximumSuccessfulAttemptsDefinitionJSON struct {
@@ -130,7 +132,7 @@ type historyJSON struct {
 	Attempts []attemptJSON `json:"attempts"`
 }
 
-type jsonIntegerMinimumEvaluationJSON struct {
+type jsonIntegerEvaluationJSON struct {
 	Type     string `json:"type"`
 	Observed int64  `json:"observed"`
 	Violated bool   `json:"violated"`
@@ -396,10 +398,11 @@ func runStatus(input Input) (string, error) {
 }
 
 func invariantDefinition(invariant engine.Invariant) any {
-	if definition := invariant.JSONIntegerMinimum; definition != nil {
-		return jsonIntegerMinimumDefinitionJSON{
-			Type: "json_integer_minimum", Name: definition.Name,
+	if definition := invariant.JSONInteger; definition != nil {
+		return jsonIntegerDefinitionJSON{
+			Type: "json_integer", Name: definition.Name,
 			Path: append([]string{}, definition.Path...), Minimum: definition.Minimum,
+			Maximum: definition.Maximum, Equals: definition.Equals,
 		}
 	}
 	if definition := invariant.MaximumSuccessfulAttempts; definition != nil {
@@ -495,9 +498,9 @@ func invariantEvaluation(evaluation *engine.InvariantEvaluation) any {
 	if evaluation == nil {
 		return nil
 	}
-	if concrete := evaluation.JSONIntegerMinimum; concrete != nil {
-		return jsonIntegerMinimumEvaluationJSON{
-			Type: "json_integer_minimum", Observed: concrete.Observed, Violated: concrete.Violated,
+	if concrete := evaluation.JSONInteger; concrete != nil {
+		return jsonIntegerEvaluationJSON{
+			Type: "json_integer", Observed: concrete.Observed, Violated: concrete.Violated,
 		}
 	}
 	if concrete := evaluation.MaximumSuccessfulAttempts; concrete != nil {

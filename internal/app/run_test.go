@@ -19,6 +19,78 @@ import (
 	"github.com/eumarumar/concurtest/internal/app"
 )
 
+func TestRunJSONIntegerConstraints(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/state" {
+			if _, err := w.Write([]byte(`{"stock":999}`)); err != nil {
+				t.Errorf("write observation: %v", err)
+			}
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+	tests := []struct {
+		fields, expected string
+		code             int
+	}{
+		{"minimum: 999", `$["stock"] >= 999`, 0},
+		{"maximum: 999", `$["stock"] <= 999`, 0},
+		{"maximum: 998", `$["stock"] <= 998`, 1},
+		{"equals: 999", `$["stock"] == 999`, 0},
+		{"equals: 998", `$["stock"] == 998`, 1},
+		{"minimum: 998\n  maximum: 999", `998 <= $["stock"] <= 999`, 0},
+		{"minimum: 1000\n  maximum: 1001", `1000 <= $["stock"] <= 1001`, 1},
+	}
+	for _, test := range tests {
+		for _, format := range []string{"text", "json"} {
+			t.Run(test.fields+"/"+format, func(t *testing.T) {
+				document := strings.Replace(scenarioYAML(server.URL, "1s", 2, 2, false), "minimum: 0", test.fields, 1)
+				path := writeScenarioFile(t, document)
+				var stdout, stderr bytes.Buffer
+				code := app.Run(context.Background(), []string{"run", "--format", format, path}, &stdout, &stderr)
+				if code != test.code || stderr.Len() != 0 {
+					t.Fatalf("exit %d, want %d; stdout %s; stderr %s", code, test.code, &stdout, &stderr)
+				}
+				if format == "text" {
+					if !strings.Contains(stdout.String(), test.expected) {
+						t.Fatalf("missing expectation %q: %s", test.expected, &stdout)
+					}
+					return
+				}
+				var result struct {
+					SchemaVersion string `json:"schema_version"`
+					Status        string `json:"status"`
+					Trials        []struct {
+						Evidence struct {
+							Evaluation struct {
+								Type     string `json:"type"`
+								Observed int64  `json:"observed"`
+								Violated bool   `json:"violated"`
+							} `json:"invariant_evaluation"`
+						} `json:"evidence"`
+					} `json:"trials"`
+				}
+				if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+					t.Fatal(err)
+				}
+				if result.SchemaVersion != "1.0.0" || len(result.Trials) != 1 {
+					t.Fatalf("unexpected report: %s", &stdout)
+				}
+				wantStatus := "passed"
+				if test.code == 1 {
+					wantStatus = "violated"
+				}
+				evaluation := result.Trials[0].Evidence.Evaluation
+				if result.Status != wantStatus || evaluation.Type != "json_integer" || evaluation.Observed != 999 || evaluation.Violated != (test.code == 1) {
+					t.Fatalf("unexpected evaluation: %s", &stdout)
+				}
+			})
+		}
+	}
+}
+
 func TestRunShowsHelp(t *testing.T) {
 	t.Parallel()
 

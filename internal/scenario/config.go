@@ -121,6 +121,8 @@ type invariantConfig struct {
 	Name                      strictString   `yaml:"name"`
 	JSONIntegerPath           jsonPathConfig `yaml:"json_integer_path"`
 	Minimum                   *strictInt64   `yaml:"minimum"`
+	Maximum                   *strictInt64   `yaml:"maximum"`
+	Equals                    *strictInt64   `yaml:"equals"`
 	MaximumSuccessfulAttempts *strictInt     `yaml:"maximum_successful_attempts"`
 	SuccessfulStatusCodes     strictIntList  `yaml:"successful_status_codes"`
 }
@@ -133,6 +135,8 @@ func (config *invariantConfig) UnmarshalYAML(node *yaml.Node) error {
 		"name":                        {},
 		"json_integer_path":           {},
 		"minimum":                     {},
+		"maximum":                     {},
+		"equals":                      {},
 		"maximum_successful_attempts": {},
 		"successful_status_codes":     {},
 	}
@@ -150,6 +154,9 @@ func (config *invariantConfig) UnmarshalYAML(node *yaml.Node) error {
 			return fmt.Errorf("invariant field %q is repeated", key.Value)
 		}
 		seen[key.Value] = struct{}{}
+		if (key.Value == "minimum" || key.Value == "maximum" || key.Value == "equals") && value.Tag == "!!null" {
+			return fmt.Errorf("invariant.%s must be an integer", key.Value)
+		}
 		if key.Value == "successful_status_codes" && value.Tag == "!!null" {
 			return errors.New("invariant.successful_status_codes must be a list of integers")
 		}
@@ -371,8 +378,8 @@ func (document documentConfig) definition() (Definition, error) {
 	if err != nil {
 		return Definition{}, err
 	}
-	if invariant.JSONIntegerMinimum != nil && document.Observation == nil {
-		return Definition{}, errors.New("observation is required for a JSON integer minimum invariant")
+	if invariant.JSONInteger != nil && document.Observation == nil {
+		return Definition{}, errors.New("observation is required for a JSON integer invariant")
 	}
 
 	var setup *engine.HTTPRequest
@@ -423,15 +430,21 @@ func (config invariantConfig) invariant(name string) (engine.Invariant, error) {
 	maximumConfigured := config.MaximumSuccessfulAttempts != nil
 	statusesConfigured := config.SuccessfulStatusCodes.configured
 
-	if pathConfigured || minimumConfigured {
+	if pathConfigured || minimumConfigured || config.Maximum != nil || config.Equals != nil {
 		if maximumConfigured || statusesConfigured {
 			return engine.Invariant{}, errors.New("invariant must define either a JSON integer path or maximum successful attempts, not both")
 		}
 		if !pathConfigured {
 			return engine.Invariant{}, errors.New("invariant.json_integer_path is required")
 		}
-		if !minimumConfigured {
-			return engine.Invariant{}, errors.New("invariant.minimum is required")
+		if !minimumConfigured && config.Maximum == nil && config.Equals == nil {
+			return engine.Invariant{}, errors.New("invariant requires minimum, maximum, or equals")
+		}
+		if config.Equals != nil && (minimumConfigured || config.Maximum != nil) {
+			return engine.Invariant{}, errors.New("invariant.equals cannot be combined with minimum or maximum")
+		}
+		if minimumConfigured && config.Maximum != nil && *config.Minimum > *config.Maximum {
+			return engine.Invariant{}, errors.New("invariant.minimum must not exceed maximum")
 		}
 		if len(config.JSONIntegerPath.values) == 0 {
 			return engine.Invariant{}, errors.New("invariant.json_integer_path must not be empty")
@@ -443,19 +456,27 @@ func (config invariantConfig) invariant(name string) (engine.Invariant, error) {
 			}
 			path[index] = segment
 		}
-		definition := engine.JSONIntegerMinimumInvariant{
-			Name:    name,
-			Path:    path,
-			Minimum: int64(*config.Minimum),
+		definition := engine.JSONIntegerInvariant{
+			Name: name,
+			Path: path,
 		}
-		return engine.Invariant{JSONIntegerMinimum: &definition}, nil
+		if config.Minimum != nil {
+			definition.Minimum = new(int64(*config.Minimum))
+		}
+		if config.Maximum != nil {
+			definition.Maximum = new(int64(*config.Maximum))
+		}
+		if config.Equals != nil {
+			definition.Equals = new(int64(*config.Equals))
+		}
+		return engine.Invariant{JSONInteger: &definition}, nil
 	}
 
 	if !maximumConfigured {
 		if statusesConfigured {
 			return engine.Invariant{}, errors.New("invariant.maximum_successful_attempts is required with successful_status_codes")
 		}
-		return engine.Invariant{}, errors.New("invariant must define json_integer_path and minimum or maximum_successful_attempts")
+		return engine.Invariant{}, errors.New("invariant must define json_integer_path with minimum, maximum, or equals, or maximum_successful_attempts")
 	}
 	if *config.MaximumSuccessfulAttempts < 0 {
 		return engine.Invariant{}, errors.New("invariant.maximum_successful_attempts must not be negative")

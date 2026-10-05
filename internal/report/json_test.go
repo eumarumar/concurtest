@@ -20,6 +20,78 @@ import (
 
 const reportSchemaID = "https://concurtest.dev/schemas/report-v1.schema.json"
 
+func TestWriteJSONIntegerConstraintsMatchSchema(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name                     string
+		minimum, maximum, equals *int64
+	}{
+		{name: "minimum zero", minimum: new(int64(0))},
+		{name: "maximum zero", maximum: new(int64(0))},
+		{name: "equals zero", equals: new(int64(0))},
+		{name: "range", minimum: new(int64(-10)), maximum: new(int64(20))},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := completedTextInput("passed", 0)
+			definition := input.Scenario.Invariant.JSONInteger
+			definition.Minimum, definition.Maximum, definition.Equals = test.minimum, test.maximum, test.equals
+			input.Result.Trials[0].Run.Evaluation.JSONInteger.Invariant = *definition
+			var output bytes.Buffer
+			if err := report.WriteJSON(&output, input); err != nil {
+				t.Fatal(err)
+			}
+			validateReportJSON(t, output.Bytes())
+			var document map[string]any
+			decodeJSON(t, output.Bytes(), &document)
+			invariant := document["scenario"].(map[string]any)["invariant"].(map[string]any)
+			if invariant["type"] != "json_integer" {
+				t.Fatalf("type = %v", invariant["type"])
+			}
+			for _, constraint := range []struct {
+				name  string
+				value *int64
+			}{{"minimum", test.minimum}, {"maximum", test.maximum}, {"equals", test.equals}} {
+				value, exists := invariant[constraint.name]
+				if exists != (constraint.value != nil) {
+					t.Fatalf("unexpected presence of %s: %v", constraint.name, invariant)
+				}
+				if exists && value != float64(*constraint.value) {
+					t.Fatalf("unexpected %s: %v", constraint.name, value)
+				}
+			}
+		})
+	}
+}
+
+func TestReportSchemaRejectsInvalidIntegerConstraints(t *testing.T) {
+	t.Parallel()
+	input := completedTextInput("passed", 0)
+	var output bytes.Buffer
+	if err := report.WriteJSON(&output, input); err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	decodeJSON(t, output.Bytes(), &document)
+	scenario := document["scenario"].(map[string]any)
+	schema := compiledReportSchema(t)
+	for _, constraints := range []map[string]any{
+		{}, {"equals": 0, "minimum": 0}, {"equals": 0, "maximum": 0},
+		{"equals": 0, "minimum": 0, "maximum": 0},
+		{"maximum": nil}, {"equals": nil}, {"maximum": "999"}, {"equals": 1.5},
+		{"minimum": 0, "unknown": 1},
+	} {
+		invariant := map[string]any{"type": "json_integer", "name": "stock check", "path": []any{"stock"}}
+		for key, value := range constraints {
+			invariant[key] = value
+		}
+		scenario["invariant"] = invariant
+		if err := schema.Validate(document); err == nil {
+			t.Fatalf("schema accepted invalid constraints: %v", invariant)
+		}
+	}
+}
+
 func TestWriteJSONProducesSchemaValidCompleteSafeEvidence(t *testing.T) {
 	t.Parallel()
 
@@ -31,8 +103,8 @@ func TestWriteJSONProducesSchemaValidCompleteSafeEvidence(t *testing.T) {
 	input.Scenario.Operation.Request.Body = []byte("request-body-secret")
 	input.Result.Trials[0].Run.History.Attempts[0].Execution.Request.Body = []byte("request-body-secret")
 	path := []string{"data", "Products", "0", "BasketItem", "quantity"}
-	input.Scenario.Invariant.JSONIntegerMinimum.Path = path
-	input.Result.Trials[0].Run.Evaluation.JSONIntegerMinimum.Invariant.Path = append([]string(nil), path...)
+	input.Scenario.Invariant.JSONInteger.Path = path
+	input.Result.Trials[0].Run.Evaluation.JSONInteger.Invariant.Path = append([]string(nil), path...)
 
 	var output bytes.Buffer
 	if err := report.WriteJSON(&output, input); err != nil {

@@ -125,16 +125,16 @@ func Run(
 			return result, failure.New(failure.CodeResponseTruncated, "observe scenario state: response body was truncated")
 		}
 
-		evaluation, err := EvaluateJSONIntegerMinimum(
-			*scenario.Invariant.JSONIntegerMinimum,
+		evaluation, err := EvaluateJSONInteger(
+			*scenario.Invariant.JSONInteger,
 			observation.Response.Body,
 		)
 		if err != nil {
 			return result, failure.Wrap(failure.CodeInvariantEvaluationFailed, "evaluate scenario invariant", err)
 		}
 		result.Evaluation = &InvariantEvaluation{
-			JSONIntegerMinimum: &evaluation,
-			Violated:           evaluation.Violated,
+			JSONInteger: &evaluation,
+			Violated:    evaluation.Violated,
 		}
 	}
 
@@ -163,8 +163,8 @@ func validateRunInput(ctx context.Context, client *http.Client, scenario Scenari
 	if err := validateInvariant(scenario.Invariant); err != nil {
 		return failure.Wrap(failure.CodeInvariantInvalid, "validate scenario invariant", err)
 	}
-	if scenario.Invariant.JSONIntegerMinimum != nil && scenario.Observation == nil {
-		return failure.New(failure.CodeInvariantInvalid, "validate scenario invariant: JSON integer minimum requires an observation")
+	if scenario.Invariant.JSONInteger != nil && scenario.Observation == nil {
+		return failure.New(failure.CodeInvariantInvalid, "validate scenario invariant: JSON integer requires an observation")
 	}
 	return nil
 }

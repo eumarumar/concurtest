@@ -13,24 +13,26 @@ import (
 
 // Invariant contains exactly one concrete invariant definition.
 type Invariant struct {
-	JSONIntegerMinimum        *JSONIntegerMinimumInvariant
+	JSONInteger               *JSONIntegerInvariant
 	MaximumSuccessfulAttempts *MaximumSuccessfulAttemptsInvariant
 }
 
-// JSONIntegerMinimumInvariant requires the JSON integer at one path to
-// be greater than or equal to Minimum.
-type JSONIntegerMinimumInvariant struct {
+// JSONIntegerInvariant constrains the JSON integer at one path. Bounds are
+// inclusive; Equals is mutually exclusive with Minimum and Maximum.
+type JSONIntegerInvariant struct {
 	Name string
 	// Path entries select literal object keys or zero-based array indexes.
 	// Indexes use canonical decimal strings, keeping numeric object keys valid.
-	Path    []string
-	Minimum int64
+	Path []string
+	// Pointers distinguish an omitted constraint from a constraint of zero.
+	Minimum *int64
+	Maximum *int64
+	Equals  *int64
 }
 
-// JSONIntegerMinimumEvaluation records the value observed for one JSON integer
-// minimum invariant.
-type JSONIntegerMinimumEvaluation struct {
-	Invariant JSONIntegerMinimumInvariant
+// JSONIntegerEvaluation records the value observed for one JSON integer invariant.
+type JSONIntegerEvaluation struct {
+	Invariant JSONIntegerInvariant
 	Observed  int64
 	Violated  bool
 }
@@ -55,32 +57,32 @@ type MaximumSuccessfulAttemptsEvaluation struct {
 
 // InvariantEvaluation contains exactly one concrete evaluation.
 type InvariantEvaluation struct {
-	JSONIntegerMinimum        *JSONIntegerMinimumEvaluation
+	JSONInteger               *JSONIntegerEvaluation
 	MaximumSuccessfulAttempts *MaximumSuccessfulAttemptsEvaluation
 	Violated                  bool
 }
 
-// EvaluateJSONIntegerMinimum evaluates an invariant against one JSON document.
-func EvaluateJSONIntegerMinimum(
-	invariant JSONIntegerMinimumInvariant,
+// EvaluateJSONInteger evaluates an invariant against one JSON document.
+func EvaluateJSONInteger(
+	invariant JSONIntegerInvariant,
 	document []byte,
-) (JSONIntegerMinimumEvaluation, error) {
-	if err := validateJSONIntegerMinimumInvariant(invariant); err != nil {
-		return JSONIntegerMinimumEvaluation{}, err
+) (JSONIntegerEvaluation, error) {
+	if err := validateJSONIntegerInvariant(invariant); err != nil {
+		return JSONIntegerEvaluation{}, err
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(document))
 	var rawValue json.RawMessage
 	if err := decoder.Decode(&rawValue); err != nil {
-		return JSONIntegerMinimumEvaluation{}, fmt.Errorf("decode observation as JSON: %w", err)
+		return JSONIntegerEvaluation{}, fmt.Errorf("decode observation as JSON: %w", err)
 	}
 
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return JSONIntegerMinimumEvaluation{}, errors.New("decode observation as JSON: multiple JSON values")
+			return JSONIntegerEvaluation{}, errors.New("decode observation as JSON: multiple JSON values")
 		}
-		return JSONIntegerMinimumEvaluation{}, fmt.Errorf("decode trailing observation data: %w", err)
+		return JSONIntegerEvaluation{}, fmt.Errorf("decode trailing observation data: %w", err)
 	}
 
 	path := formatJSONPath(invariant.Path)
@@ -88,26 +90,28 @@ func EvaluateJSONIntegerMinimum(
 		var err error
 		rawValue, err = jsonPathChild(rawValue, segment, formatJSONPath(invariant.Path[:index]))
 		if err != nil {
-			return JSONIntegerMinimumEvaluation{}, err
+			return JSONIntegerEvaluation{}, err
 		}
 	}
 
 	var observed *int64
 	if err := json.Unmarshal(rawValue, &observed); err != nil {
-		return JSONIntegerMinimumEvaluation{}, fmt.Errorf(
+		return JSONIntegerEvaluation{}, fmt.Errorf(
 			"observation path %s must contain a JSON integer representable as int64: %w",
 			path,
 			err,
 		)
 	}
 	if observed == nil {
-		return JSONIntegerMinimumEvaluation{}, fmt.Errorf("observation path %s must contain an integer, not null", path)
+		return JSONIntegerEvaluation{}, fmt.Errorf("observation path %s must contain an integer, not null", path)
 	}
 
-	return JSONIntegerMinimumEvaluation{
-		Invariant: cloneJSONIntegerMinimumInvariant(invariant),
+	return JSONIntegerEvaluation{
+		Invariant: cloneJSONIntegerInvariant(invariant),
 		Observed:  *observed,
-		Violated:  *observed < invariant.Minimum,
+		Violated: (invariant.Minimum != nil && *observed < *invariant.Minimum) ||
+			(invariant.Maximum != nil && *observed > *invariant.Maximum) ||
+			(invariant.Equals != nil && *observed != *invariant.Equals),
 	}, nil
 }
 
@@ -178,26 +182,35 @@ func EvaluateMaximumSuccessfulAttempts(
 	}, nil
 }
 
-func validateJSONIntegerMinimumInvariant(invariant JSONIntegerMinimumInvariant) error {
+func validateJSONIntegerInvariant(invariant JSONIntegerInvariant) error {
 	if strings.TrimSpace(invariant.Name) == "" {
-		return errors.New("evaluate JSON integer minimum invariant: empty name")
+		return errors.New("evaluate JSON integer invariant: empty name")
 	}
 	if len(invariant.Path) == 0 {
-		return errors.New("evaluate JSON integer minimum invariant: empty path")
+		return errors.New("evaluate JSON integer invariant: empty path")
 	}
 	for index, segment := range invariant.Path {
 		if strings.TrimSpace(segment) == "" {
-			return fmt.Errorf("evaluate JSON integer minimum invariant: empty path segment %d", index+1)
+			return fmt.Errorf("evaluate JSON integer invariant: empty path segment %d", index+1)
 		}
+	}
+	if invariant.Minimum == nil && invariant.Maximum == nil && invariant.Equals == nil {
+		return errors.New("JSON integer invariant requires minimum, maximum, or equals")
+	}
+	if invariant.Equals != nil && (invariant.Minimum != nil || invariant.Maximum != nil) {
+		return errors.New("JSON integer invariant: equals cannot be combined with minimum or maximum")
+	}
+	if invariant.Minimum != nil && invariant.Maximum != nil && *invariant.Minimum > *invariant.Maximum {
+		return errors.New("JSON integer invariant: minimum must not exceed maximum")
 	}
 	return nil
 }
 
 func validateInvariant(invariant Invariant) error {
 	definitions := 0
-	if invariant.JSONIntegerMinimum != nil {
+	if invariant.JSONInteger != nil {
 		definitions++
-		if err := validateJSONIntegerMinimumInvariant(*invariant.JSONIntegerMinimum); err != nil {
+		if err := validateJSONIntegerInvariant(*invariant.JSONInteger); err != nil {
 			return err
 		}
 	}
@@ -264,8 +277,17 @@ func cloneMaximumSuccessfulAttemptsInvariant(
 	return invariant
 }
 
-func cloneJSONIntegerMinimumInvariant(invariant JSONIntegerMinimumInvariant) JSONIntegerMinimumInvariant {
+func cloneJSONIntegerInvariant(invariant JSONIntegerInvariant) JSONIntegerInvariant {
 	invariant.Path = append([]string(nil), invariant.Path...)
+	if invariant.Minimum != nil {
+		invariant.Minimum = new(*invariant.Minimum)
+	}
+	if invariant.Maximum != nil {
+		invariant.Maximum = new(*invariant.Maximum)
+	}
+	if invariant.Equals != nil {
+		invariant.Equals = new(*invariant.Equals)
+	}
 	return invariant
 }
 

@@ -160,8 +160,9 @@ presentation settings.
 
 The contract is defined by the checked-in
 [report schema](schemas/report-v1.schema.json). Reports currently use schema
-version `1.0.0`. Objects are closed; adding, removing, or changing an emitted
-property requires a new major schema version.
+version `1.0.0`, which may evolve before launch. Objects are closed; after launch,
+adding, removing, or changing an emitted property requires a new major schema
+version.
 
 Response excerpts retain at most 512 bytes. Valid UTF-8 is emitted as text and
 other bytes are base64 encoded. Reports never include request bodies or HTTP
@@ -174,6 +175,36 @@ Exit codes do not depend on report format:
 - `1` means at least one trial demonstrated an invariant violation.
 - `2` means no violation was demonstrated and the run was inconclusive,
   errored, or interrupted.
+
+## JSON integer constraints
+
+Use `json_integer_path` to check an observed integer. Bounds are inclusive:
+
+| Fields | Required value |
+| --- | --- |
+| `minimum: 0` | value >= 0 |
+| `maximum: 999` | value <= 999 |
+| `minimum: 10` and `maximum: 20` | 10 <= value <= 20 |
+| `equals: 999` | value == 999 |
+
+For a checkout that must decrement stock exactly once:
+
+```yaml
+invariant:
+  name: basket checkout must decrement stock exactly once
+  json_integer_path: [data, quantity]
+  equals: 999
+```
+
+An observation request is required for these checks. Define at least one of
+`minimum`, `maximum`, or `equals`. Do not combine `equals` with either bound,
+and keep `minimum` less than or equal to `maximum`. All constraint values must
+be integers representable as signed 64-bit values; zero and negative values are
+valid. Each scenario still declares exactly one invariant.
+
+In JSON reports, these checks use type `json_integer`; their definition includes
+only the configured constraints. The evaluation records `observed` and `violated`.
+
 
 ## Detect a failure hidden by final state
 

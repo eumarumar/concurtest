@@ -61,10 +61,10 @@ func TestRunExecutesSetupOperationsObservationAndFindsViolation(t *testing.T) {
 		Concurrency: 2,
 		Observation: &engine.HTTPRequest{Method: http.MethodGet, URL: server.URL + "/state"},
 		Invariant: engine.Invariant{
-			JSONIntegerMinimum: &engine.JSONIntegerMinimumInvariant{
+			JSONInteger: &engine.JSONIntegerInvariant{
 				Name:    "stock must be non-negative",
 				Path:    []string{"stock"},
-				Minimum: 0,
+				Minimum: new(int64(0)),
 			},
 		},
 	})
@@ -87,8 +87,8 @@ func TestRunExecutesSetupOperationsObservationAndFindsViolation(t *testing.T) {
 	if result.Evaluation == nil {
 		t.Fatal("evaluation was not recorded")
 	}
-	if result.Evaluation.JSONIntegerMinimum == nil ||
-		result.Evaluation.JSONIntegerMinimum.Observed != -1 ||
+	if result.Evaluation.JSONInteger == nil ||
+		result.Evaluation.JSONInteger.Observed != -1 ||
 		!result.Evaluation.Violated {
 		t.Errorf("evaluation = %#v, want observed -1 violation", result.Evaluation)
 	}
@@ -525,7 +525,7 @@ func TestRunValidatesBeforeSetup(t *testing.T) {
 	setup := engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/setup"}
 	scenario := scenarioWithoutSetup()
 	scenario.Setup = &setup
-	scenario.Invariant.JSONIntegerMinimum.Name = ""
+	scenario.Invariant.JSONInteger.Name = ""
 
 	result, err := engine.Run(context.Background(), client, scenario)
 	if err == nil {
@@ -608,10 +608,10 @@ func scenarioWithoutSetup() engine.Scenario {
 		Concurrency: 1,
 		Observation: &engine.HTTPRequest{Method: http.MethodGet, URL: "http://example.test/state"},
 		Invariant: engine.Invariant{
-			JSONIntegerMinimum: &engine.JSONIntegerMinimumInvariant{
+			JSONInteger: &engine.JSONIntegerInvariant{
 				Name:    "stock must be non-negative",
 				Path:    []string{"stock"},
-				Minimum: 0,
+				Minimum: new(int64(0)),
 			},
 		},
 	}

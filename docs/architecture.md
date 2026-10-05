@@ -195,9 +195,12 @@ one seat cannot have multiple confirmed owners
 Invariant evaluation should be separate from transport execution.
 
 A scenario continues to declare exactly one invariant. The current concrete
-forms are a JSON integer minimum at a configured path and a maximum
-number of successful HTTP attempts. They are represented explicitly rather
-than through an expression language or plugin system.
+forms are a JSON integer constraint at a configured path and a maximum
+number of successful HTTP attempts. JSON integer constraints support an inclusive
+minimum, an inclusive maximum, both bounds, or exact equality. Equality cannot
+be combined with bounds, and a minimum must not exceed its maximum. The concrete
+forms are represented explicitly rather than through an expression language or
+plugin system.
 
 JSON integer paths traverse objects and arrays. YAML accepts string keys and
 non-negative integer indexes, normalizing indexes to decimal strings in the
@@ -316,9 +319,10 @@ This keeps text useful to people without requiring CI consumers to parse error
 strings.
 
 The checked-in JSON Schema uses semantic versions and closed objects. The
-initial contract is `1.0.0`; changing emitted fields or their shapes requires a
-new major version. Schema validation is a test concern, not a runtime dependency
-of the reporter.
+current pre-launch contract is `1.0.0`; the schema may evolve before launch.
+After launch, changing emitted fields or their shapes requires a new major
+version. Schema validation is a test concern, not a runtime dependency of the
+reporter.
 
 Report evidence stays bounded and safe. Response excerpts retain at most 512
 bytes and identify UTF-8 or base64 encoding plus truncation. HTTP headers and

@@ -2,6 +2,8 @@ package engine_test
 
 import (
 	"errors"
+	"fmt"
+	"math"
 	"net/http"
 	"reflect"
 	"strings"
@@ -10,13 +12,83 @@ import (
 	"github.com/eumarumar/concurtest/internal/engine"
 )
 
-func TestEvaluateJSONIntegerMinimum(t *testing.T) {
+func TestEvaluateJSONIntegerConstraints(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name                     string
+		minimum, maximum, equals *int64
+		observed                 int64
+		violated                 bool
+	}{
+		{name: "minimum below", minimum: new(int64(10)), observed: 9, violated: true},
+		{name: "minimum boundary", minimum: new(int64(10)), observed: 10},
+		{name: "maximum below", maximum: new(int64(999)), observed: 998},
+		{name: "maximum boundary", maximum: new(int64(999)), observed: 999},
+		{name: "maximum above", maximum: new(int64(999)), observed: 1000, violated: true},
+		{name: "equals below", equals: new(int64(999)), observed: 998, violated: true},
+		{name: "equals boundary", equals: new(int64(999)), observed: 999},
+		{name: "equals above", equals: new(int64(999)), observed: 1000, violated: true},
+		{name: "range below", minimum: new(int64(10)), maximum: new(int64(20)), observed: 9, violated: true},
+		{name: "range lower boundary", minimum: new(int64(10)), maximum: new(int64(20)), observed: 10},
+		{name: "range interior", minimum: new(int64(10)), maximum: new(int64(20)), observed: 15},
+		{name: "range upper boundary", minimum: new(int64(10)), maximum: new(int64(20)), observed: 20},
+		{name: "range above", minimum: new(int64(10)), maximum: new(int64(20)), observed: 21, violated: true},
+		{name: "single point range", minimum: new(int64(0)), maximum: new(int64(0)), observed: 0},
+		{name: "zero equals", equals: new(int64(0)), observed: -1, violated: true},
+		{name: "negative maximum", maximum: new(int64(-10)), observed: -9, violated: true},
+		{name: "negative equals", equals: new(int64(-10)), observed: -10},
+		{name: "int64 minimum", equals: new(int64(math.MinInt64)), observed: math.MinInt64},
+		{name: "int64 maximum", equals: new(int64(math.MaxInt64)), observed: math.MaxInt64},
+		{name: "exact adjacent large integers", equals: new(int64(math.MaxInt64)), observed: math.MaxInt64 - 1, violated: true},
+		{name: "full int64 range", minimum: new(int64(math.MinInt64)), maximum: new(int64(math.MaxInt64)), observed: 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			invariant := engine.JSONIntegerInvariant{Name: test.name, Path: []string{"data", "quantity"}, Minimum: test.minimum, Maximum: test.maximum, Equals: test.equals}
+			evaluation, err := engine.EvaluateJSONInteger(invariant, []byte(fmt.Sprintf(`{"data":{"quantity":%d}}`, test.observed)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if evaluation.Observed != test.observed || evaluation.Violated != test.violated {
+				t.Fatalf("evaluation = %#v, want observed %d, violated %t", evaluation, test.observed, test.violated)
+			}
+			if !reflect.DeepEqual(evaluation.Invariant, invariant) {
+				t.Fatal("evaluation changed the invariant")
+			}
+		})
+	}
+}
+
+func TestEvaluateJSONIntegerCopiesConstraints(t *testing.T) {
+	t.Parallel()
+	for _, invariant := range []engine.JSONIntegerInvariant{
+		{Name: "range", Path: []string{"stock"}, Minimum: new(int64(0)), Maximum: new(int64(20))},
+		{Name: "equals", Path: []string{"stock"}, Equals: new(int64(10))},
+	} {
+		evaluation, err := engine.EvaluateJSONInteger(invariant, []byte(`{"stock":10}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, pair := range [][2]*int64{{invariant.Minimum, evaluation.Invariant.Minimum}, {invariant.Maximum, evaluation.Invariant.Maximum}, {invariant.Equals, evaluation.Invariant.Equals}} {
+			if pair[0] == nil {
+				continue
+			}
+			before := *pair[1]
+			*pair[0] = -100
+			if *pair[1] != before {
+				t.Fatal("evaluation constraint changed with input")
+			}
+		}
+	}
+}
+
+func TestEvaluateJSONInteger(t *testing.T) {
 	t.Parallel()
 
-	invariant := engine.JSONIntegerMinimumInvariant{
+	invariant := engine.JSONIntegerInvariant{
 		Name:    "stock must be non-negative",
 		Path:    []string{"data", "quantity"},
-		Minimum: 0,
+		Minimum: new(int64(0)),
 	}
 	tests := []struct {
 		name          string
@@ -75,18 +147,18 @@ func TestEvaluateJSONIntegerMinimum(t *testing.T) {
 			if test.path != nil {
 				definition.Path = test.path
 			}
-			evaluation, err := engine.EvaluateJSONIntegerMinimum(definition, []byte(test.document))
+			evaluation, err := engine.EvaluateJSONInteger(definition, []byte(test.document))
 			if test.wantErr {
 				if err == nil {
-					t.Fatal("EvaluateJSONIntegerMinimum() error = nil, want error")
+					t.Fatal("EvaluateJSONInteger() error = nil, want error")
 				}
 				if test.wantErrorText != "" && !strings.Contains(err.Error(), test.wantErrorText) {
-					t.Errorf("EvaluateJSONIntegerMinimum() error = %q, want text %q", err, test.wantErrorText)
+					t.Errorf("EvaluateJSONInteger() error = %q, want text %q", err, test.wantErrorText)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("EvaluateJSONIntegerMinimum() error = %v", err)
+				t.Fatalf("EvaluateJSONInteger() error = %v", err)
 			}
 			if !reflect.DeepEqual(evaluation.Invariant, definition) {
 				t.Errorf("evaluation invariant = %#v, want %#v", evaluation.Invariant, definition)
@@ -101,15 +173,15 @@ func TestEvaluateJSONIntegerMinimum(t *testing.T) {
 	}
 }
 
-func TestEvaluateJSONIntegerMinimumCopiesInvariantPath(t *testing.T) {
+func TestEvaluateJSONIntegerCopiesInvariantPath(t *testing.T) {
 	t.Parallel()
 
-	invariant := engine.JSONIntegerMinimumInvariant{
-		Name: "quantity must be non-negative", Path: []string{"data", "quantity"}, Minimum: 0,
+	invariant := engine.JSONIntegerInvariant{
+		Name: "quantity must be non-negative", Path: []string{"data", "quantity"}, Minimum: new(int64(0)),
 	}
-	evaluation, err := engine.EvaluateJSONIntegerMinimum(invariant, []byte(`{"data":{"quantity":1}}`))
+	evaluation, err := engine.EvaluateJSONInteger(invariant, []byte(`{"data":{"quantity":1}}`))
 	if err != nil {
-		t.Fatalf("EvaluateJSONIntegerMinimum() error = %v", err)
+		t.Fatalf("EvaluateJSONInteger() error = %v", err)
 	}
 	invariant.Path[0] = "changed"
 	if evaluation.Invariant.Path[0] != "data" {
@@ -210,21 +282,26 @@ func executionWithStatus(status int) *engine.HTTPExecution {
 	return &engine.HTTPExecution{Response: &engine.HTTPResponse{StatusCode: status}}
 }
 
-func TestEvaluateJSONIntegerMinimumRejectsInvalidDefinition(t *testing.T) {
+func TestEvaluateJSONIntegerRejectsInvalidDefinition(t *testing.T) {
 	t.Parallel()
 
-	tests := []engine.JSONIntegerMinimumInvariant{
-		{Path: []string{"stock"}},
-		{Name: "stock must be non-negative"},
-		{Name: " ", Path: []string{"stock"}},
-		{Name: "stock must be non-negative", Path: []string{}},
-		{Name: "stock must be non-negative", Path: []string{" "}},
-		{Name: "stock must be non-negative", Path: []string{"data", ""}},
+	tests := []engine.JSONIntegerInvariant{
+		{Path: []string{"stock"}, Minimum: new(int64(0))},
+		{Name: "stock must be non-negative", Minimum: new(int64(0))},
+		{Name: " ", Path: []string{"stock"}, Minimum: new(int64(0))},
+		{Name: "stock must be non-negative", Path: []string{}, Minimum: new(int64(0))},
+		{Name: "stock must be non-negative", Path: []string{" "}, Minimum: new(int64(0))},
+		{Name: "stock must be non-negative", Path: []string{"data", ""}, Minimum: new(int64(0))},
+		{Name: "no constraints", Path: []string{"stock"}},
+		{Name: "equals and minimum", Path: []string{"stock"}, Equals: new(int64(0)), Minimum: new(int64(0))},
+		{Name: "equals and maximum", Path: []string{"stock"}, Equals: new(int64(0)), Maximum: new(int64(0))},
+		{Name: "equals and range", Path: []string{"stock"}, Equals: new(int64(0)), Minimum: new(int64(0)), Maximum: new(int64(0))},
+		{Name: "reversed range", Path: []string{"stock"}, Minimum: new(int64(20)), Maximum: new(int64(10))},
 	}
 
 	for _, invariant := range tests {
-		if _, err := engine.EvaluateJSONIntegerMinimum(invariant, []byte(`{"stock":0}`)); err == nil {
-			t.Errorf("EvaluateJSONIntegerMinimum(%#v) error = nil, want validation error", invariant)
+		if _, err := engine.EvaluateJSONInteger(invariant, []byte(`{"stock":0}`)); err == nil {
+			t.Errorf("EvaluateJSONInteger(%#v) error = nil, want validation error", invariant)
 		}
 	}
 }

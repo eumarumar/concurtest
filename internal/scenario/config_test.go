@@ -79,11 +79,11 @@ func TestDecodeValidScenario(t *testing.T) {
 	if definition.Scenario.Observation.URL != "http://127.0.0.1:8080/state" {
 		t.Errorf("observation URL = %q", definition.Scenario.Observation.URL)
 	}
-	jsonInvariant := definition.Scenario.Invariant.JSONIntegerMinimum
+	jsonInvariant := definition.Scenario.Invariant.JSONInteger
 	if jsonInvariant == nil ||
 		jsonInvariant.Name != "final stock must be non-negative" ||
 		fmt.Sprint(jsonInvariant.Path) != "[stock]" ||
-		jsonInvariant.Minimum != 0 {
+		(jsonInvariant.Minimum == nil || *jsonInvariant.Minimum != 0) {
 		t.Errorf("invariant = %#v", definition.Scenario.Invariant)
 	}
 }
@@ -101,11 +101,11 @@ func TestDecodeAllowsArrayIndexesInJSONIntegerPath(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			invariant := definition.Scenario.Invariant.JSONIntegerMinimum
+			invariant := definition.Scenario.Invariant.JSONInteger
 			if got := strings.Join(invariant.Path, "/"); got != "data/Products/0/BasketItem/quantity" {
 				t.Fatalf("path = %q", got)
 			}
-			evaluation, err := engine.EvaluateJSONIntegerMinimum(*invariant, []byte(`{"data":{"Products":[{"BasketItem":{"quantity":-1}}]}}`))
+			evaluation, err := engine.EvaluateJSONInteger(*invariant, []byte(`{"data":{"Products":[{"BasketItem":{"quantity":-1}}]}}`))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -389,4 +389,76 @@ invariant:
   name: accepted purchases must not exceed stock
   maximum_successful_attempts: 1
 %s`, target, statusLine)
+}
+
+func TestDecodeJSONIntegerConstraints(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, fields             string
+		minimum, maximum, equals *int64
+	}{
+		{name: "minimum", fields: "minimum: 0", minimum: new(int64(0))},
+		{name: "maximum", fields: "maximum: 999", maximum: new(int64(999))},
+		{name: "equals", fields: "equals: 999", equals: new(int64(999))},
+		{name: "range", fields: "minimum: 10\n  maximum: 20", minimum: new(int64(10)), maximum: new(int64(20))},
+		{name: "equal bounds", fields: "minimum: 0\n  maximum: 0", minimum: new(int64(0)), maximum: new(int64(0))},
+		{name: "negative maximum", fields: "maximum: -1", maximum: new(int64(-1))},
+		{name: "zero equals", fields: "equals: 0", equals: new(int64(0))},
+		{name: "int64 minimum", fields: "equals: -9223372036854775808", equals: new(int64(-9223372036854775808))},
+		{name: "int64 maximum", fields: "maximum: 9223372036854775807", maximum: new(int64(9223372036854775807))},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			document := strings.Replace(validYAML("http://example.test"), "minimum: 0", test.fields, 1)
+			definition, err := scenario.Decode(strings.NewReader(document))
+			if err != nil {
+				t.Fatal(err)
+			}
+			invariant := definition.Scenario.Invariant.JSONInteger
+			if invariant == nil {
+				t.Fatal("missing JSON integer invariant")
+			}
+			for _, pair := range [][2]*int64{{invariant.Minimum, test.minimum}, {invariant.Maximum, test.maximum}, {invariant.Equals, test.equals}} {
+				if (pair[0] == nil) != (pair[1] == nil) || (pair[0] != nil && *pair[0] != *pair[1]) {
+					t.Fatalf("constraints = %#v, want %#v", invariant, test)
+				}
+			}
+		})
+	}
+}
+
+func TestDecodeRejectsInvalidJSONIntegerConstraints(t *testing.T) {
+	t.Parallel()
+	valid := validYAML("http://example.test")
+	for _, fields := range []string{
+		"equals: 0\n  minimum: 0", "equals: 0\n  maximum: 0",
+		"equals: 0\n  minimum: 0\n  maximum: 0", "minimum: 20\n  maximum: 10",
+		"maximum: null", "equals: null", "minimum: null", "maximum: 1\n  equals: null",
+		"maximum: 1.5", "equals: 1.0", "maximum: '999'", "equals: true",
+		"maximum: 9223372036854775808", "equals: -9223372036854775809",
+		"equals: 1\n  equals: 2", "maximum: 1\n  maximum: 2",
+		"maximum: []", "equals: {}", "equals: 0x10",
+		"maximum: 1\n  maximum_successful_attempts: 1", "equals: 1\n  successful_status_codes: [201]",
+	} {
+		t.Run(fields, func(t *testing.T) {
+			document := strings.Replace(valid, "minimum: 0", fields, 1)
+			if _, err := scenario.Decode(strings.NewReader(document)); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+	for _, field := range []string{"maximum: 1", "equals: 1"} {
+		t.Run("missing path "+field, func(t *testing.T) {
+			document := strings.Replace(strings.Replace(valid, "minimum: 0", field, 1), "  json_integer_path: [data, stock]\n", "", 1)
+			if _, err := scenario.Decode(strings.NewReader(document)); err == nil {
+				t.Fatal("expected missing path error")
+			}
+		})
+		t.Run("missing observation "+field, func(t *testing.T) {
+			document := strings.Replace(strings.Replace(valid, "minimum: 0", field, 1), "observation:\n  method: GET\n  path: /state\n\n", "", 1)
+			if _, err := scenario.Decode(strings.NewReader(document)); err == nil {
+				t.Fatal("expected missing observation error")
+			}
+		})
+	}
 }
