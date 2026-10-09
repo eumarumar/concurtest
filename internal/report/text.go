@@ -572,8 +572,10 @@ func writeCompactProblem(writer io.Writer, style textStyle, sources []compactTri
 }
 
 func writeCompactProblemExecutions(writer io.Writer, trial engine.TrialResult) {
-	if stageExecutionProblem(trial.Run.Setup) {
-		writeCompactStage(writer, "Setup", trial.Run.Setup)
+	for index, step := range trial.Run.Setup {
+		if stageExecutionProblem(&step.Execution) {
+			writeCompactStage(writer, setupLabel(index, step.Name), &step.Execution)
+		}
 	}
 
 	problemAttempts := make([]engine.Attempt, 0)
@@ -652,7 +654,14 @@ func writeTrialEvidence(writer io.Writer, style textStyle, scenario engine.Scena
 		fmt.Fprintf(writer, "  Finding         %d of %d attempts failed or did not start, so this trial cannot be reported as a pass.\n", failed, len(trial.Run.History.Attempts))
 	}
 	writeInvariant(writer, style, scenario.Invariant, trial.Run.Evaluation)
-	writeOptionalExecution(writer, "Setup", trial.Run.Setup)
+	for index, step := range scenario.Setup {
+		label := setupLabel(index, step.Name)
+		if index >= len(trial.Run.Setup) {
+			fmt.Fprintf(writer, "\n  %s\n    Not reached.\n", label)
+			continue
+		}
+		writeOptionalExecution(writer, label, &trial.Run.Setup[index].Execution)
+	}
 	if scenario.Invariant.JSONInteger != nil && scenario.Invariant.JSONInteger.Change != nil {
 		fmt.Fprintln(writer, "\n  Baseline observation")
 		if trial.Run.BaselineObservation == nil {
@@ -663,6 +672,14 @@ func writeTrialEvidence(writer io.Writer, style textStyle, scenario engine.Scena
 	}
 	writeAttempts(writer, trial.Run.History)
 	writeObservation(writer, scenario.Observation, trial.Run.Observation)
+}
+
+func setupLabel(index int, name string) string {
+	label := fmt.Sprintf("Setup #%d", index+1)
+	if name != "" {
+		label += " · " + quoted(name)
+	}
+	return label
 }
 
 func writeRunProblem(writer io.Writer, style textStyle, runErr error) {

@@ -169,7 +169,7 @@ func reduce(
 }
 
 func validateInput(scenario engine.Scenario, trials int) error {
-	if scenario.Setup == nil {
+	if len(scenario.Setup) == 0 {
 		return failure.New(failure.CodeReductionInvalid, "validate reduction: setup is required to reset state before every trial")
 	}
 	if trials < 3 || trials > engine.MaxTrials {

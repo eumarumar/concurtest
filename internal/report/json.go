@@ -55,6 +55,11 @@ type operationJSON struct {
 	Request requestJSON `json:"request"`
 }
 
+type setupExecutionJSON struct {
+	Name      string         `json:"name"`
+	Execution *executionJSON `json:"execution"`
+}
+
 type executionConfigJSON struct {
 	Attempts         int  `json:"attempts"`
 	Concurrency      int  `json:"concurrency"`
@@ -68,7 +73,7 @@ type scenarioJSON struct {
 	Target           string              `json:"target"`
 	RequestTimeoutNS int64               `json:"request_timeout_ns"`
 	Execution        executionConfigJSON `json:"execution"`
-	Setup            *requestJSON        `json:"setup"`
+	Setup            []operationJSON     `json:"setup"`
 	Operation        operationJSON       `json:"operation"`
 	Observation      *requestJSON        `json:"observation"`
 	Invariant        any                 `json:"invariant"`
@@ -149,13 +154,13 @@ type maximumSuccessfulAttemptsEvaluationJSON struct {
 }
 
 type runEvidenceJSON struct {
-	Outcome             *string        `json:"outcome"`
-	Timing              *timingJSON    `json:"timing"`
-	Setup               *executionJSON `json:"setup"`
-	BaselineObservation *executionJSON `json:"baseline_observation"`
-	History             historyJSON    `json:"history"`
-	Observation         *executionJSON `json:"observation"`
-	InvariantEvaluation any            `json:"invariant_evaluation"`
+	Outcome             *string              `json:"outcome"`
+	Timing              *timingJSON          `json:"timing"`
+	Setup               []setupExecutionJSON `json:"setup"`
+	BaselineObservation *executionJSON       `json:"baseline_observation"`
+	History             historyJSON          `json:"history"`
+	Observation         *executionJSON       `json:"observation"`
+	InvariantEvaluation any                  `json:"invariant_evaluation"`
 }
 
 type trialJSON struct {
@@ -277,9 +282,9 @@ func validateJSONInput(input Input) error {
 	if err := validateReportedRequest(input.Scenario.Operation.Request); err != nil {
 		return fmt.Errorf("scenario operation request: %w", err)
 	}
-	if input.Scenario.Setup != nil {
-		if err := validateReportedRequest(*input.Scenario.Setup); err != nil {
-			return fmt.Errorf("scenario setup request: %w", err)
+	for index, step := range input.Scenario.Setup {
+		if err := validateReportedRequest(step.Request); err != nil {
+			return fmt.Errorf("scenario setup step %d request: %w", index+1, err)
 		}
 	}
 	if input.Scenario.Observation != nil {
@@ -369,7 +374,7 @@ func newRunReportJSON(input Input) (runReportJSON, error) {
 				Trials:           configuredTrials,
 				ReductionEnabled: reductionEnabled,
 			},
-			Setup: configuredRequest(input.Scenario.Setup),
+			Setup: setupRequestsJSON(input.Scenario.Setup),
 			Operation: operationJSON{
 				Name:    input.Scenario.Operation.Name,
 				Request: requestFromEngine(input.Scenario.Operation.Request),
@@ -454,12 +459,28 @@ func runResultJSON(result engine.RunResult) runEvidenceJSON {
 	return runEvidenceJSON{
 		Outcome:             outcome,
 		Timing:              timing(result.StartedAt, result.CompletedAt),
-		Setup:               executionResultJSON(result.Setup),
+		Setup:               setupExecutionsJSON(result.Setup),
 		BaselineObservation: executionResultJSON(result.BaselineObservation),
 		History:             historyJSON{Timing: timing(result.History.StartedAt, result.History.CompletedAt), Attempts: attempts},
 		Observation:         executionResultJSON(result.Observation),
 		InvariantEvaluation: invariantEvaluation(result.Evaluation),
 	}
+}
+
+func setupRequestsJSON(steps []engine.SetupStep) []operationJSON {
+	result := make([]operationJSON, len(steps))
+	for index, step := range steps {
+		result[index] = operationJSON{Name: step.Name, Request: requestFromEngine(step.Request)}
+	}
+	return result
+}
+
+func setupExecutionsJSON(steps []engine.SetupExecution) []setupExecutionJSON {
+	result := make([]setupExecutionJSON, len(steps))
+	for index, step := range steps {
+		result[index] = setupExecutionJSON{Name: step.Name, Execution: executionResultJSON(&step.Execution)}
+	}
+	return result
 }
 
 func executionResultJSON(execution *engine.HTTPExecution) *executionJSON {

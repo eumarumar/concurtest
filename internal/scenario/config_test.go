@@ -48,17 +48,17 @@ func TestDecodeValidScenario(t *testing.T) {
 	if !definition.Reduce {
 		t.Error("reduce = false, want true")
 	}
-	if definition.Scenario.Setup == nil {
-		t.Fatal("setup request is nil")
+	if len(definition.Scenario.Setup) != 1 || definition.Scenario.Setup[0].Name != "" {
+		t.Fatalf("legacy setup did not become one unnamed step: %#v", definition.Scenario.Setup)
 	}
-	if definition.Scenario.Setup.URL != "http://127.0.0.1:8080/reset" {
-		t.Errorf("setup URL = %q", definition.Scenario.Setup.URL)
+	if definition.Scenario.Setup[0].Request.URL != "http://127.0.0.1:8080/reset" {
+		t.Errorf("setup URL = %q", definition.Scenario.Setup[0].Request.URL)
 	}
-	if definition.Scenario.Setup.Header.Get("Content-Type") != "application/json" {
-		t.Errorf("setup Content-Type = %q", definition.Scenario.Setup.Header.Get("Content-Type"))
+	if definition.Scenario.Setup[0].Request.Header.Get("Content-Type") != "application/json" {
+		t.Errorf("setup Content-Type = %q", definition.Scenario.Setup[0].Request.Header.Get("Content-Type"))
 	}
-	if string(definition.Scenario.Setup.Body) != `{"stock":1}` {
-		t.Errorf("setup body = %q", definition.Scenario.Setup.Body)
+	if string(definition.Scenario.Setup[0].Request.Body) != `{"stock":1}` {
+		t.Errorf("setup body = %q", definition.Scenario.Setup[0].Request.Body)
 	}
 	if definition.Scenario.Operation.Name != "purchase" {
 		t.Errorf("operation name = %q", definition.Scenario.Operation.Name)

@@ -108,10 +108,23 @@ The architecture must not require those future capabilities to exist immediately
 
 ### Reproducibility trials
 
-A scenario may request a bounded number of independent trials. Trials execute
-sequentially so setup can establish a clean state before every concurrent
-operation group. Concurrency remains bounded within a trial; the trial
-orchestrator itself does not add goroutines.
+A scenario may request a bounded number of repeated trials. Trials execute
+sequentially so setup can establish controlled preconditions before every
+concurrent operation group. The scenario author is responsible for resetting
+the state relevant to the invariant; the engine cannot guarantee independence
+from earlier trials merely by running setup or reading a fresh baseline.
+Concurrency remains bounded within a trial; the trial orchestrator itself does
+not add goroutines.
+
+Setup accepts the legacy request mapping or a list of named request steps in
+YAML. Both forms normalize to one ordered engine slice, bounded to 100 steps.
+The run goroutine executes each step synchronously, including reading and closing
+its response, before starting the next step. Setup does not use operation workers
+or introduce goroutines. All steps must succeed with a 2xx response before a
+baseline observation or concurrent operation can start. A failed step stops that
+trial and retains the attempted prefix, including the failure. Cancellation
+stops further steps and trials. Later ordinary trials restart the full setup
+sequence; no rollback or cleanup is implied.
 
 Each trial retains its complete structured run evidence and is classified as
 passed, violated, inconclusive, or errored. Ordinary trial errors are recorded
@@ -131,8 +144,8 @@ a strict majority of at least three clean trials. Errored or inconclusive
 trials prevent reduction from starting.
 
 Candidates vary only attempt count and concurrency. They run sequentially in a
-stable attempts-first order, use the baseline trial count, and reset state
-before every trial through the existing complete scenario runner. Candidate
+stable attempts-first order, use the baseline trial count, and run all setup
+steps before every trial through the existing complete scenario runner. Candidate
 concurrency starts at two so reduction remains focused on concurrent failures.
 
 The search stops at the first qualifying candidate or after 100 candidates.
@@ -338,6 +351,13 @@ bytes and identify UTF-8 or base64 encoding plus truncation. HTTP headers and
 request bodies are never emitted. The top-level baseline is not duplicated
 inside reduction output; rejected candidates retain summaries, while selected
 or interrupted candidates may retain their complete ordered trials.
+
+Setup definitions and execution evidence use ordered JSON arrays. Definitions
+contain each step's name and safe request metadata; trial evidence contains only
+attempted steps, each with its name and HTTP execution. Empty arrays represent
+no configured or attempted steps. The legacy single-request YAML form normalizes
+to a step with an empty name. Compact text identifies a failed step by position
+and name; verbose text also shows successful steps and marks unattempted steps.
 
 The default text presentation has a fixed evidence budget. It shows one
 violating trial from the smallest selected reduction, or the first baseline

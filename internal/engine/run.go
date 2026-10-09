@@ -24,11 +24,27 @@ const (
 	RunOutcomeInconclusive RunOutcome = "inconclusive"
 )
 
+// MaxSetupSteps bounds preparation requests and their retained response bodies.
+const MaxSetupSteps = 100
+
+// SetupStep prepares state before test operations. Name may be empty for a
+// legacy single-request setup.
+type SetupStep struct {
+	Name    string
+	Request HTTPRequest
+}
+
+// SetupExecution retains an attempted setup step, including a failed step.
+type SetupExecution struct {
+	Name      string
+	Execution HTTPExecution
+}
+
 // Scenario describes the programmatic scenario supported by the initial
-// engine: optional setup, one repeated operation, an optional observation, and
+// engine: ordered setup, one repeated operation, an optional observation, and
 // one invariant.
 type Scenario struct {
-	Setup       *HTTPRequest
+	Setup       []SetupStep
 	Operation   Operation
 	Attempts    int
 	Concurrency int
@@ -36,12 +52,12 @@ type Scenario struct {
 	Invariant   Invariant
 }
 
-// RunResult records each completed stage of a scenario run. Pointer fields are
-// nil when their stage was optional or was not reached.
+// RunResult records each attempted setup step and later scenario stages.
+// Pointer fields are nil when their stage was optional or was not reached.
 type RunResult struct {
 	StartedAt   time.Time
 	CompletedAt time.Time
-	Setup       *HTTPExecution
+	Setup       []SetupExecution
 	// BaselineObservation is captured after setup and before operations only
 	// for a change invariant. Each trial and reduction candidate captures its own.
 	BaselineObservation *HTTPExecution
@@ -73,11 +89,23 @@ func Run(
 		return result, err
 	}
 
-	if scenario.Setup != nil {
-		setup := ExecuteHTTP(ctx, client, *scenario.Setup)
-		result.Setup = &setup
-		if err := requireSuccessfulStage("setup", setup); err != nil {
+	// Preparation belongs to this goroutine. Complete each response before
+	// starting the next step; only ExecuteConcurrent starts operation workers.
+	for index, step := range scenario.Setup {
+		if err := ctx.Err(); err != nil {
+			return result, failure.Wrap(failure.CodeSetupFailed, "prepare scenario", err)
+		}
+		setup := ExecuteHTTP(ctx, client, step.Request)
+		result.Setup = append(result.Setup, SetupExecution{Name: step.Name, Execution: setup})
+		label := fmt.Sprintf("setup step %d", index+1)
+		if step.Name != "" {
+			label += fmt.Sprintf(" (%q)", step.Name)
+		}
+		if err := requireSuccessfulStage(label, setup); err != nil {
 			return result, err
+		}
+		if err := ctx.Err(); err != nil {
+			return result, failure.Wrap(failure.CodeSetupFailed, label+" scenario request", err)
 		}
 	}
 
@@ -174,6 +202,9 @@ func Run(
 }
 
 func validateRunInput(ctx context.Context, client *http.Client, scenario Scenario) error {
+	if len(scenario.Setup) > MaxSetupSteps {
+		return failure.New(failure.CodeInvalidExecution, fmt.Sprintf("setup must contain at most %d steps", MaxSetupSteps))
+	}
 	if err := validateConcurrentInput(
 		ctx,
 		client,

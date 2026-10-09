@@ -116,10 +116,17 @@
           }
         },
         "setup": {
-          "oneOf": [
-            { "$ref": "#/$defs/request" },
-            { "type": "null" }
-          ]
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "request"],
+            "properties": {
+              "name": { "type": "string" },
+              "request": { "$ref": "#/$defs/request" }
+            }
+          }
         },
         "operation": {
           "type": "object",
@@ -293,10 +300,17 @@
             "outcome": { "type": ["string", "null"], "enum": ["passed", "violated", "inconclusive", null] },
             "timing": { "$ref": "#/$defs/nullable_timing" },
             "setup": {
-              "oneOf": [
-                { "$ref": "#/$defs/execution" },
-                { "type": "null" }
-              ]
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "execution"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "execution": { "$ref": "#/$defs/execution" }
+                }
+              }
             },
             "history": {
               "type": "object",

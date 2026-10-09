@@ -127,7 +127,7 @@ func TestRunChangeCapturesFreshBaselineAfterSetupInEveryTrial(t *testing.T) {
 		}
 	})}
 	scenario := scenarioWithoutSetup()
-	scenario.Setup = &engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/setup"}
+	scenario.Setup = []engine.SetupStep{{Request: engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/setup"}}}
 	scenario.Attempts, scenario.Concurrency = 2, 2
 	scenario.Invariant.JSONInteger.Minimum = nil
 	scenario.Invariant.JSONInteger.Change = new(int64(-1))
@@ -147,7 +147,7 @@ func TestRunChangeCapturesFreshBaselineAfterSetupInEveryTrial(t *testing.T) {
 		if value.Baseline == nil || *value.Baseline != int64((i+1)*1000) || value.Change == nil || *value.Change != -2 {
 			t.Fatalf("trial %d did not retain its baseline and change: %#v", i+1, value)
 		}
-		if baseline.StartedAt.Before(trial.Run.Setup.CompletedAt) || trial.Run.History.StartedAt.Before(baseline.CompletedAt) || trial.Run.Observation.StartedAt.Before(trial.Run.History.CompletedAt) {
+		if baseline.StartedAt.Before(trial.Run.Setup[0].Execution.CompletedAt) || trial.Run.History.StartedAt.Before(baseline.CompletedAt) || trial.Run.Observation.StartedAt.Before(trial.Run.History.CompletedAt) {
 			t.Fatal("stage timing order is incorrect")
 		}
 	}

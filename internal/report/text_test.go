@@ -496,7 +496,7 @@ func TestWriteTextReturnsWriterAndInputErrors(t *testing.T) {
 func completedTextInput(outcome engine.RunOutcome, observed int64) report.TextInput {
 	start := time.Unix(1_700_000_000, 0)
 	scenario := testScenario()
-	setup := successfulExecution(scenario.Setup, start.Add(time.Millisecond), 2*time.Millisecond, http.StatusNoContent, nil)
+	setup := successfulExecution(&scenario.Setup[0].Request, start.Add(time.Millisecond), 2*time.Millisecond, http.StatusNoContent, nil)
 	first := successfulExecution(&scenario.Operation.Request, start.Add(12*time.Millisecond), 10*time.Millisecond, http.StatusCreated, []byte(`{"accepted":true}`))
 	second := successfulExecution(&scenario.Operation.Request, start.Add(13*time.Millisecond), 8*time.Millisecond, http.StatusConflict, []byte("out of stock"))
 	observation := successfulExecution(scenario.Observation, start.Add(60*time.Millisecond), 5*time.Millisecond, http.StatusOK, []byte(`{"stock":-1}`))
@@ -512,7 +512,7 @@ func completedTextInput(outcome engine.RunOutcome, observed int64) report.TextIn
 		status = engine.TrialStatusInconclusive
 	}
 	run := engine.RunResult{
-		StartedAt: start, CompletedAt: start.Add(80 * time.Millisecond), Setup: setup,
+		StartedAt: start, CompletedAt: start.Add(80 * time.Millisecond), Setup: []engine.SetupExecution{{Execution: *setup}},
 		History:     engine.History{StartedAt: start.Add(10 * time.Millisecond), CompletedAt: start.Add(50 * time.Millisecond), Attempts: []engine.Attempt{{ID: 1, OperationName: "purchase", Execution: first}, {ID: 2, OperationName: "purchase", Execution: second}}},
 		Observation: observation, Evaluation: &evaluation, Outcome: outcome,
 	}
@@ -526,7 +526,7 @@ func testScenario() engine.Scenario {
 	secretHeader := http.Header{"Authorization": {"request-secret"}}
 	setup := engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/reset", Header: secretHeader}
 	return engine.Scenario{
-		Setup:     &setup,
+		Setup:     []engine.SetupStep{{Request: setup}},
 		Operation: engine.Operation{Name: "purchase", Request: engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/purchase", Header: secretHeader}},
 		Attempts:  2, Concurrency: 2,
 		Observation: &engine.HTTPRequest{Method: http.MethodGet, URL: "http://example.test/state?detail=full", Header: secretHeader},

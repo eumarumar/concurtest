@@ -52,7 +52,7 @@ func TestRunExecutesSetupOperationsObservationAndFindsViolation(t *testing.T) {
 
 	setup := engine.HTTPRequest{Method: http.MethodPost, URL: server.URL + "/setup"}
 	result, err := engine.Run(context.Background(), server.Client(), engine.Scenario{
-		Setup: &setup,
+		Setup: []engine.SetupStep{{Request: setup}},
 		Operation: engine.Operation{
 			Name:    "purchase",
 			Request: engine.HTTPRequest{Method: http.MethodPost, URL: server.URL + "/purchase"},
@@ -75,7 +75,7 @@ func TestRunExecutesSetupOperationsObservationAndFindsViolation(t *testing.T) {
 	if result.Outcome != engine.RunOutcomeViolated {
 		t.Errorf("outcome = %q, want %q", result.Outcome, engine.RunOutcomeViolated)
 	}
-	if result.Setup == nil || result.Setup.Response == nil || result.Setup.Response.StatusCode != http.StatusNoContent {
+	if result.Setup == nil || result.Setup[0].Execution.Response == nil || result.Setup[0].Execution.Response.StatusCode != http.StatusNoContent {
 		t.Errorf("setup = %#v, want successful setup execution", result.Setup)
 	}
 	if len(result.History.Attempts) != 2 {
@@ -95,7 +95,7 @@ func TestRunExecutesSetupOperationsObservationAndFindsViolation(t *testing.T) {
 	if result.StartedAt.IsZero() || result.CompletedAt.IsZero() || result.Duration() < 0 {
 		t.Errorf("invalid run timing: start=%v completion=%v duration=%v", result.StartedAt, result.CompletedAt, result.Duration())
 	}
-	if result.Setup.StartedAt.Before(result.StartedAt) {
+	if result.Setup[0].Execution.StartedAt.Before(result.StartedAt) {
 		t.Error("setup started before run")
 	}
 	if result.Observation.StartedAt.Before(result.History.CompletedAt) {
@@ -312,7 +312,7 @@ func TestRunStopsAfterSetupFailure(t *testing.T) {
 			})}
 			setup := engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/setup"}
 			scenario := scenarioWithoutSetup()
-			scenario.Setup = &setup
+			scenario.Setup = []engine.SetupStep{{Request: setup}}
 
 			result, err := engine.Run(context.Background(), client, scenario)
 			if err == nil {
@@ -524,7 +524,7 @@ func TestRunValidatesBeforeSetup(t *testing.T) {
 	})}
 	setup := engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/setup"}
 	scenario := scenarioWithoutSetup()
-	scenario.Setup = &setup
+	scenario.Setup = []engine.SetupStep{{Request: setup}}
 	scenario.Invariant.JSONInteger.Name = ""
 
 	result, err := engine.Run(context.Background(), client, scenario)
@@ -585,7 +585,7 @@ func TestRunValidatesInvariantVariantBeforeRequests(t *testing.T) {
 			})}
 			scenario := scenarioWithoutSetup()
 			setup := engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/setup"}
-			scenario.Setup = &setup
+			scenario.Setup = []engine.SetupStep{{Request: setup}}
 			test.change(&scenario)
 
 			if _, err := engine.Run(context.Background(), client, scenario); err == nil {

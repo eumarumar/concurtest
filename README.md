@@ -176,6 +176,71 @@ Exit codes do not depend on report format:
 - `2` means no violation was demonstrated and the run was inconclusive,
   errored, or interrupted.
 
+## Prepare state before each trial
+
+The optional `setup` field defines preparation requests that run before each
+trial. A single request uses the following mapping:
+
+```yaml
+setup:
+  method: POST
+  path: /testing/reset-inventory
+```
+
+For several preparation requests, use a list of named steps:
+
+```yaml
+setup:
+  - name: Reset inventory
+    request:
+      method: POST
+      path: /testing/reset-inventory
+      headers:
+        Content-Type: application/json
+      body: '{"ProductId":6,"quantity":1000}'
+
+  - name: Clear basket
+    request:
+      method: DELETE
+      path: /testing/basket/2/items
+
+  - name: Prepare basket
+    request:
+      method: POST
+      path: /api/BasketItems
+      headers:
+        Content-Type: application/json
+      body: '{"BasketId":2,"ProductId":6,"quantity":1}'
+```
+
+The example paths are illustrative and must exist in the target application.
+Each request supports its own headers and body. List entries require a non-empty
+`name` and a `request`. Setup supports at most 100 steps and can be omitted when
+preparation is not needed. The single-request mapping remains supported.
+
+ConcurTest runs setup requests in YAML order, waiting for each response to be
+read and closed before starting the next request. All steps run before every
+trial, including reduction trials. A change invariant captures its baseline
+after all setup steps complete. Only the test operation runs concurrently.
+
+Each setup response must have a 2xx status. A failed request, timeout, or non-2xx
+response stops that trial before any remaining setup steps, baseline observation,
+or test operations run. The report retains the attempted steps, including the
+failed step. Later trials start setup again from the first step; cancellation
+stops the trial sequence. Completed steps are not rolled back, so setup must
+also work after a partially prepared or previously tested state.
+
+Setup establishes controlled preconditions when its requests reset all state
+relevant to the invariant. Reading a fresh baseline does not remove side effects
+from previous trials.
+
+Verbose text shows every configured setup step and marks steps not reached.
+Compact text identifies the failed step. In JSON, `scenario.setup` is an ordered
+array of `{name, request}` objects, and each trial's `evidence.setup` is an ordered
+array of `{name, execution}` objects for attempted steps. An empty array (`[]`)
+represents no steps. A single-request mapping becomes one step with an empty
+name.
+
 ## JSON integer constraints
 
 Use `json_integer_path` to check an observed integer. Bounds are inclusive:

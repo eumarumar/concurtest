@@ -71,7 +71,7 @@ func TestRunTrialsRunsSequentialIndependentTrials(t *testing.T) {
 	})}
 	setup := engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/setup"}
 	scenario := scenarioWithoutSetup()
-	scenario.Setup = &setup
+	scenario.Setup = []engine.SetupStep{{Request: setup}}
 	scenario.Operation.Request.URL = "http://example.test/purchase"
 	scenario.Observation.URL = "http://example.test/state"
 	scenario.Attempts = attempts
@@ -135,7 +135,7 @@ func TestRunTrialsContinuesAfterErrorsAndClassifiesAggregate(t *testing.T) {
 	})}
 	setup := engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/setup"}
 	scenario := scenarioWithoutSetup()
-	scenario.Setup = &setup
+	scenario.Setup = []engine.SetupStep{{Request: setup}}
 
 	result, err := engine.RunTrials(context.Background(), client, scenario, 4)
 	if err != nil {
@@ -198,7 +198,7 @@ func TestRunTrialsAggregateStatusPrecedence(t *testing.T) {
 			})}
 			setup := engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/setup"}
 			scenario := scenarioWithoutSetup()
-			scenario.Setup = &setup
+			scenario.Setup = []engine.SetupStep{{Request: setup}}
 			result, err := engine.RunTrials(context.Background(), client, scenario, len(test.observations))
 			if err != nil {
 				t.Fatalf("RunTrials() error = %v", err)
@@ -265,7 +265,7 @@ func TestRunTrialsStopsOnParentCancellationAndPreservesActiveTrial(t *testing.T)
 	})}
 	setup := engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/setup"}
 	scenario := scenarioWithoutSetup()
-	scenario.Setup = &setup
+	scenario.Setup = []engine.SetupStep{{Request: setup}}
 	scenario.Attempts = 2
 	scenario.Concurrency = 1
 	ctx, cancel := context.WithCancel(context.Background())
@@ -344,7 +344,7 @@ func TestRunTrialsCancellationBetweenTrialsStartsNoLaterTrial(t *testing.T) {
 	})}
 	setup := engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/setup"}
 	scenario := scenarioWithoutSetup()
-	scenario.Setup = &setup
+	scenario.Setup = []engine.SetupStep{{Request: setup}}
 
 	result, err := engine.RunTrials(ctx, client, scenario, 3)
 	if !errors.Is(err, context.Canceled) {

@@ -427,7 +427,7 @@ func reductionScenario(attempts, concurrency int) engine.Scenario {
 func scenarioWithSetup(attempts, concurrency int) engine.Scenario {
 	scenario := reductionScenario(attempts, concurrency)
 	setup := engine.HTTPRequest{Method: http.MethodPost, URL: "http://example.test/setup"}
-	scenario.Setup = &setup
+	scenario.Setup = []engine.SetupStep{{Request: setup}}
 	return scenario
 }
 

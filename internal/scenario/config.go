@@ -79,7 +79,7 @@ type documentConfig struct {
 	Name           strictString    `yaml:"name"`
 	Target         strictString    `yaml:"target"`
 	RequestTimeout strictString    `yaml:"request_timeout"`
-	Setup          *requestConfig  `yaml:"setup"`
+	Setup          setupConfig     `yaml:"setup"`
 	Operation      operationConfig `yaml:"operation"`
 	Execution      executionConfig `yaml:"execution"`
 	Observation    *requestConfig  `yaml:"observation"`
@@ -91,6 +91,92 @@ type requestConfig struct {
 	Path    strictString `yaml:"path"`
 	Headers headerConfig `yaml:"headers"`
 	Body    strictString `yaml:"body"`
+}
+
+type setupStepConfig struct {
+	Name    strictString   `yaml:"name"`
+	Request *requestConfig `yaml:"request"`
+}
+
+// Both YAML forms become one ordered list. node.Decode does not inherit the
+// outer decoder's KnownFields setting, so check nested mappings explicitly.
+type setupConfig []setupStepConfig
+
+func (setup *setupConfig) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.MappingNode {
+		var request requestConfig
+		if err := node.Decode(&request); err != nil {
+			return fmt.Errorf("setup: %w", err)
+		}
+		*setup = setupConfig{{Request: &request}}
+		return nil
+	}
+	if node.Kind != yaml.SequenceNode {
+		return errors.New("setup must be a request mapping or a list of named request steps")
+	}
+	if len(node.Content) == 0 || len(node.Content) > engine.MaxSetupSteps {
+		return fmt.Errorf("setup must contain between 1 and %d steps", engine.MaxSetupSteps)
+	}
+	steps := make(setupConfig, len(node.Content))
+	for index, item := range node.Content {
+		label := fmt.Sprintf("setup step %d", index+1)
+		if err := checkMappingFields(item, "name", "request"); err != nil {
+			return fmt.Errorf("%s: %w", label, err)
+		}
+		if err := item.Decode(&steps[index]); err != nil {
+			return fmt.Errorf("%s: %w", label, err)
+		}
+		steps[index].Name = strictString(strings.TrimSpace(string(steps[index].Name)))
+		if steps[index].Name == "" {
+			return fmt.Errorf("%s.name must not be empty", label)
+		}
+		if steps[index].Request == nil {
+			return fmt.Errorf("%s.request is required", label)
+		}
+	}
+	*setup = steps
+	return nil
+}
+
+func (request *requestConfig) UnmarshalYAML(node *yaml.Node) error {
+	if err := checkMappingFields(node, "method", "path", "headers", "body"); err != nil {
+		return err
+	}
+	type plainRequestConfig requestConfig
+	var decoded plainRequestConfig
+	if err := node.Decode(&decoded); err != nil {
+		return err
+	}
+	*request = requestConfig(decoded)
+	return nil
+}
+
+func checkMappingFields(node *yaml.Node, fields ...string) error {
+	if node.Kind != yaml.MappingNode {
+		return errors.New("must be a mapping")
+	}
+	seen := make(map[string]bool, len(node.Content)/2)
+	for index := 0; index < len(node.Content); index += 2 {
+		key := node.Content[index]
+		if key.Kind != yaml.ScalarNode || key.Tag != "!!str" {
+			return errors.New("field names must be strings")
+		}
+		known := false
+		for _, field := range fields {
+			if key.Value == field {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return fmt.Errorf("unknown field %q", key.Value)
+		}
+		if seen[key.Value] {
+			return fmt.Errorf("field %q is repeated", key.Value)
+		}
+		seen[key.Value] = true
+	}
+	return nil
 }
 
 type operationConfig struct {
@@ -358,7 +444,7 @@ func (document documentConfig) definition() (Definition, error) {
 		)
 	}
 	if document.Execution.Reduce {
-		if document.Setup == nil {
+		if len(document.Setup) == 0 {
 			return Definition{}, errors.New("execution.reduce requires setup so every candidate trial can reset state")
 		}
 		if document.Execution.Trials < 3 {
@@ -384,13 +470,13 @@ func (document documentConfig) definition() (Definition, error) {
 		return Definition{}, errors.New("observation is required for a JSON integer invariant")
 	}
 
-	var setup *engine.HTTPRequest
-	if document.Setup != nil {
-		request, err := document.Setup.httpRequest("setup", target)
+	var setup []engine.SetupStep
+	for index, step := range document.Setup {
+		request, err := step.Request.httpRequest(fmt.Sprintf("setup step %d", index+1), target)
 		if err != nil {
 			return Definition{}, err
 		}
-		setup = &request
+		setup = append(setup, engine.SetupStep{Name: string(step.Name), Request: request})
 	}
 
 	operationRequest, err := document.Operation.request().httpRequest("operation", target)
