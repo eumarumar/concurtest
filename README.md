@@ -24,21 +24,61 @@ application's behavior through its HTTP interface.
 
 ## Installation
 
-Requires Go 1.27 or newer. Install from source:
+### With Go
+
+Requires Go 1.27 or newer:
+
+```bash
+go install github.com/eumarumar/concurtest/cmd/concurtest@v0.1.0
+```
+
+Add Go's executable directory (`go env GOBIN`, or `$(go env GOPATH)/bin` when
+`GOBIN` is unset) to `PATH`.
+
+### Without Go
+
+Download a compiled archive from [GitHub Releases](https://github.com/eumarumar/concurtest/releases).
+Choose the archive for the operating system and processor:
+
+| Computer | Archive |
+| --- | --- |
+| Linux x86-64 | `concurtest-linux-amd64.tar.gz` |
+| Linux ARM64 | `concurtest-linux-arm64.tar.gz` |
+| macOS Intel | `concurtest-darwin-amd64.tar.gz` |
+| macOS Apple Silicon | `concurtest-darwin-arm64.tar.gz` |
+| Windows x86-64 | `concurtest-windows-amd64.zip` |
+
+On Linux or macOS, extract and run the binary. This example uses Linux x86-64;
+substitute the matching filename from the table:
+
+```bash
+tar -xzf concurtest-linux-amd64.tar.gz
+./concurtest --help
+```
+
+On Windows, use PowerShell:
+
+```powershell
+Expand-Archive .\concurtest-windows-amd64.zip -DestinationPath .\concurtest
+.\concurtest\concurtest.exe --help
+```
+
+Add the extracted binary's folder to `PATH` to use `concurtest` from any directory.
+
+GitHub's **Source code (zip)** and **Source code (tar.gz)** downloads contain
+the repository, not compiled binaries. See [GitHub's release documentation](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases).
+
+## Quickstart — reproduce a race condition
+
+The included inventory service has a repeatable overselling bug. Running this
+demo requires Go 1.27 or newer, with no credentials or external services.
+
+Get the example files:
 
 ```bash
 git clone https://github.com/eumarumar/concurtest.git
 cd concurtest
-go install ./cmd/concurtest
 ```
-
-Add Go's executable directory (`go env GOBIN`, or `$(go env GOPATH)/bin` when
-`GOBIN` is unset) to `PATH`. Run the following examples from the repository root.
-
-## Quickstart — reproduce a race condition
-
-The included inventory service has a repeatable overselling bug. It requires
-no credentials or external services.
 
 Start it in one terminal:
 
