@@ -20,10 +20,6 @@ execution:
   trials: 10
   reduce: true
 
-observation:
-  method: GET
-  path: /available-stock
-
 invariant:
   name: accepted purchases must not exceed stock
   maximum_successful_attempts: 1
