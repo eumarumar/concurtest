@@ -21,7 +21,7 @@ func TestVulnerableInventoryEndToEnd(t *testing.T) {
 
 	server := httptest.NewServer(inventoryapp.NewHandler())
 	t.Cleanup(server.Close)
-	scenarioPath := scenarioForTarget(t, "scenario.yaml", server.URL)
+	scenarioPath := scenarioForTarget(t, "observation-scenario.yaml", server.URL)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -156,7 +156,7 @@ func TestVulnerableInventoryVerboseEndToEnd(t *testing.T) {
 
 	server := httptest.NewServer(inventoryapp.NewHandler())
 	t.Cleanup(server.Close)
-	scenarioPath := scenarioForTarget(t, "scenario.yaml", server.URL)
+	scenarioPath := scenarioForTarget(t, "observation-scenario.yaml", server.URL)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -185,7 +185,7 @@ func TestVulnerableInventoryJSONEndToEnd(t *testing.T) {
 
 	server := httptest.NewServer(inventoryapp.NewHandler())
 	t.Cleanup(server.Close)
-	scenarioPath := scenarioForTarget(t, "scenario.yaml", server.URL)
+	scenarioPath := scenarioForTarget(t, "observation-scenario.yaml", server.URL)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

@@ -1,0 +1,54 @@
+version: 1
+name: juice shop duplicate checkout
+target: http://127.0.0.1:3000
+request_timeout: 10s
+
+# Copy to .local/juice-shop/ and replace credentials as described in README.md.
+# Basket 2 must belong to the customer; inventory record 6 must be for product 6.
+setup:
+  - name: Drain previous basket contents
+    request:
+      method: POST
+      path: /rest/basket/2/checkout
+      headers:
+        Authorization: "Bearer <CUSTOMER_TOKEN>"
+        Content-Type: application/json
+      body: '{}'
+
+  - name: Restore product stock
+    request:
+      method: PUT
+      path: /api/Quantitys/6
+      headers:
+        Authorization: "Bearer <ACCOUNTING_TOKEN>"
+        Content-Type: application/json
+      body: '{"quantity":1000}'
+
+  - name: Prepare one basket item
+    request:
+      method: POST
+      path: /api/BasketItems
+      headers:
+        Authorization: "Bearer <CUSTOMER_TOKEN>"
+        Content-Type: application/json
+      body: '{"BasketId":2,"ProductId":6,"quantity":1}'
+
+operation:
+  name: checkout
+  method: POST
+  path: /rest/basket/2/checkout
+  headers:
+    Authorization: "Bearer <CUSTOMER_TOKEN>"
+    Content-Type: application/json
+  body: '{}'
+
+execution:
+  attempts: 4
+  concurrency: 4
+  trials: 10
+  reduce: true
+
+invariant:
+  name: basket must only be checked out once
+  maximum_successful_attempts: 1
+  successful_status_codes: [200]

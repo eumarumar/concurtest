@@ -1,3 +1,5 @@
+# Check observed stock after concurrent purchases.
+# Run instructions and expected results: README.md.
 version: 1
 name: inventory oversell
 target: http://127.0.0.1:8080

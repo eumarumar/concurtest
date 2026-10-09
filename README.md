@@ -1,9 +1,9 @@
 # ConcurTest
 
-ConcurTest finds correctness failures that appear when state-changing operations
-run concurrently, are retried, duplicated, reordered, or interrupted. It tests
-an application through its external interfaces, regardless of the language or
-framework used to build that application.
+ConcurTest tests correctness when state-changing requests run concurrently. It
+records what happened, checks declared invariants, and searches for a smaller
+observed reproduction of a failure. It interacts with applications through
+HTTP, regardless of their language or framework.
 
 The current v0 supports sequential reproducibility trials. A trial can reset
 the target, repeat one HTTP operation with bounded concurrency, and evaluate
@@ -21,10 +21,11 @@ settings after a failure reproduces across a clean majority of trials.
 
 - Go 1.27 or newer
 
-## Run the vulnerable inventory demonstration
+## Run the reproducible regression demo
 
-The included inventory service starts with one item and deliberately handles
-two simultaneous purchases incorrectly.
+The included Go inventory service starts with one item and deliberately handles
+two simultaneous purchases incorrectly. It requires no credentials or external
+services.
 
 Start it in one terminal:
 
@@ -34,13 +35,25 @@ go run ./examples/vulnerable-inventory
 
 It listens only on `127.0.0.1:8080`.
 
-In a second terminal, run the checked-in scenario:
+In a second terminal, run either checked-in scenario. Run them sequentially
+because both reset and modify the same inventory:
 
 ```bash
-go run ./cmd/concurtest run examples/vulnerable-inventory/scenario.yaml
+go run ./cmd/concurtest run examples/vulnerable-inventory/observation-scenario.yaml
+go run ./cmd/concurtest run examples/vulnerable-inventory/history-scenario.yaml
 ```
 
-The scenario selects the observed value with an explicit list of object keys:
+| Scenario | Check | Expected failure |
+| --- | --- | --- |
+| [Observation](examples/vulnerable-inventory/observation-scenario.yaml) | Stock stays non-negative | Final stock is `-1` |
+| [History](examples/vulnerable-inventory/history-scenario.yaml) | At most one purchase returns HTTP 201 | Two purchases succeed, even when availability reports `0` |
+
+Both scenarios reset stock to one before every trial, including reduction trials.
+See the [demo guide](examples/vulnerable-inventory/README.md) for the routes and
+repeatable failure mechanism.
+
+The observation scenario selects the observed value with an explicit list of
+object keys:
 
 ```yaml
 invariant:
@@ -64,28 +77,15 @@ Missing keys, out-of-range indexes, and non-integer values produce an evaluation
 error. Reports retain path entries as strings, including indexes.
 
 The checked-in scenario starts with four attempts at concurrency four and runs
-10 independent trials. Each trial resets the inventory. After the failure
-reproduces, ConcurTest tests smaller settings and selects two attempts at
-concurrency two:
+10 trials. Each trial resets the inventory and purchase coordination. After the
+failure reproduces, ConcurTest tests smaller settings and selects two attempts
+at concurrency two. The report includes:
 
 ```text
 ConcurTest · inventory oversell
 
 VIOLATED
 10/10 trials demonstrated the violation.
-
-Trials
-  Requested       10
-  Completed       10
-  Passed          0
-  Violated        10
-  Inconclusive    0
-  Errored         0
-  First violation Trial 1
-
-Execution
-  Attempts        4
-  Concurrency     4
 
 Invariant
   final stock must be non-negative
@@ -98,20 +98,6 @@ Reduction
   Concurrency     2
   Violations      10/10 trials
   Note            Smallest observed failure; a smaller one may still exist.
-
-Evidence
-  Smallest observed failure · Trial 1
-    Attempt #1     POST /purchase · HTTP 201 Created
-      Response        "{\"accepted\":true}"
-    Attempt #2     POST /purchase · HTTP 201 Created
-      Response        "{\"accepted\":true}"
-    Observation    GET /state · HTTP 200 OK
-      Response        "{\"stock\":-1}"
-
-Reproduce
-  concurtest run --attempts 2 --concurrency 2 --no-reduce examples/vulnerable-inventory/scenario.yaml
-
-Run with --verbose for all trial evidence.
 ```
 
 The command exits with code `1`. That non-zero result is expected in this
@@ -122,7 +108,7 @@ It does not claim that the result is mathematically minimal. Its reproduction
 command uses execution overrides and disables another reduction pass:
 
 ```text
-concurtest run --attempts 2 --concurrency 2 --no-reduce examples/vulnerable-inventory/scenario.yaml
+concurtest run --attempts 2 --concurrency 2 --no-reduce examples/vulnerable-inventory/observation-scenario.yaml
 ```
 
 The default text report shows one smallest observed failure, at most four
@@ -132,7 +118,7 @@ including passing trials and retained reduction evidence; verbose excerpts
 retain up to 512 bytes:
 
 ```bash
-go run ./cmd/concurtest run --verbose examples/vulnerable-inventory/scenario.yaml
+go run ./cmd/concurtest run --verbose examples/vulnerable-inventory/observation-scenario.yaml
 ```
 
 Terminal color is selected automatically. Redirected or piped output stays
@@ -145,7 +131,7 @@ Text remains the default. Select the versioned JSON report explicitly when a
 CI job or another tool needs structured results:
 
 ```bash
-go run ./cmd/concurtest run --format json examples/vulnerable-inventory/scenario.yaml
+go run ./cmd/concurtest run --format json examples/vulnerable-inventory/observation-scenario.yaml
 ```
 
 The JSON document includes scenario metadata, aggregate counts, every ordered
@@ -294,23 +280,13 @@ changes can affect the result.
 
 Text reports show the baseline, final value, and observed change. JSON trial
 evidence includes `baseline_observation` (null for other checks); change
-evaluations add `baseline` and `change`. Schema version remains `1.0.0`.
+evaluations add `baseline` and `change`.
 
 
-## Detect a failure hidden by final state
+## History-based invariants
 
-The service also exposes an availability view that reports negative stock as
-zero. That view looks valid after the oversell, but it cannot erase the two
-purchase responses that were already accepted.
-
-Run the history-based scenario against the same service:
-
-```bash
-go run ./cmd/concurtest run examples/vulnerable-inventory/history-scenario.yaml
-```
-
-It limits successful purchase attempts to one and explicitly treats HTTP `201`
-as success:
+A history invariant evaluates recorded operation responses. The regression
+history scenario limits accepted purchases to one:
 
 ```yaml
 invariant:
@@ -320,10 +296,11 @@ invariant:
 ```
 
 If `successful_status_codes` is omitted, every HTTP status from `200` through
-`299` counts as success. The report identifies every successful attempt and
-which stable attempt IDs are beyond the configured maximum. This scenario also
-runs 10 trials and reduces the observed failure to two attempts at concurrency
-two.
+`299` counts as success. Reports identify qualifying attempt IDs and those beyond
+the configured maximum. An optional observation provides context without
+replacing the history check. Successful HTTP responses are evidence for the
+declared contract; they do not automatically establish a business outcome such
+as a paid order.
 
 ## Why the example fails
 
@@ -339,8 +316,51 @@ race-detector clean and still be incorrect under concurrency.
 The example uses a two-request rendezvous to make this broken ordering
 repeatable within each trial. ConcurTest has no knowledge of that coordination;
 it interacts only through the HTTP requests declared in the
-[state scenario](examples/vulnerable-inventory/scenario.yaml) or
+[state scenario](examples/vulnerable-inventory/observation-scenario.yaml) or
 [history scenario](examples/vulnerable-inventory/history-scenario.yaml).
+
+## Juice Shop case study
+
+The [Juice Shop examples](examples/juice-shop/README.md) exercise duplicate
+checkout in an external application:
+
+- [History scenario](examples/juice-shop/history-scenario.yaml): at most one
+  checkout attempt returns HTTP 200.
+- [Observation scenario](examples/juice-shop/stock-scenario.yaml): checkout
+  decreases inventory by exactly one unit.
+
+These templates require customer and accounting credentials, local inventory
+access, and ordered basket and stock preparation. The case study guide documents
+those requirements and the side effects that setup leaves behind. Credential
+placeholders must be replaced in ignored local copies before running.
+
+The following excerpt comes from a previously captured local history run. It
+shows baseline invariant evidence and the reduced settings; it is not a new run
+of the templates:
+
+```text
+ConcurTest · juice shop duplicate checkout
+
+VIOLATED
+10 of 10 completed trials demonstrated the violation.
+
+Invariant
+  basket must only be checked out once
+  Expected        At most 1 successful attempt
+  Observed        4 successful attempts
+
+Reduction
+  Status          REDUCED
+  Smallest observed failure
+    Attempts      2
+    Concurrency   2
+    Violations    10 of 10 trials
+```
+
+This demonstrates multiple successful checkout responses under the declared
+at-most-once contract. The stock check measures a different property and may
+pass when lost updates hide duplicate effects. Neither result alone proves the
+contents or payment status of generated orders.
 
 ## Development checks
 

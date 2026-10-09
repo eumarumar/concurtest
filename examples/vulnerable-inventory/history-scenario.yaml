@@ -1,3 +1,5 @@
+# Count accepted purchases even when reported availability hides overselling.
+# Run instructions and expected results: README.md.
 version: 1
 name: inventory accepted purchases
 target: http://127.0.0.1:8080
