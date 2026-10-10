@@ -35,6 +35,16 @@ go install github.com/eumarumar/concurtest/cmd/concurtest@v0.1.0
 Add Go's executable directory (`go env GOBIN`, or `$(go env GOPATH)/bin` when
 `GOBIN` is unset) to `PATH`.
 
+If `concurtest` is not found after installation, run this on Linux or macOS:
+
+```bash
+concurtest_bin="$(go env GOBIN)"
+export PATH="${concurtest_bin:-$(go env GOPATH)/bin}:$PATH"
+concurtest --help
+```
+
+This updates `PATH` for the current terminal.
+
 ### Without Go
 
 Download a compiled archive from [GitHub Releases](https://github.com/eumarumar/concurtest/releases).
@@ -42,19 +52,24 @@ Choose the archive for the operating system and processor:
 
 | Computer | Archive |
 | --- | --- |
-| Linux x86-64 | `concurtest-linux-amd64.tar.gz` |
-| Linux ARM64 | `concurtest-linux-arm64.tar.gz` |
-| macOS Intel | `concurtest-darwin-amd64.tar.gz` |
-| macOS Apple Silicon | `concurtest-darwin-arm64.tar.gz` |
-| Windows x86-64 | `concurtest-windows-amd64.zip` |
+| Linux x86-64 | [concurtest-linux-amd64.tar.gz](https://github.com/eumarumar/concurtest/releases/download/v0.1.0/concurtest-linux-amd64.tar.gz) |
+| Linux ARM64 | [concurtest-linux-arm64.tar.gz](https://github.com/eumarumar/concurtest/releases/download/v0.1.0/concurtest-linux-arm64.tar.gz) |
+| macOS Intel | [concurtest-darwin-amd64.tar.gz](https://github.com/eumarumar/concurtest/releases/download/v0.1.0/concurtest-darwin-amd64.tar.gz) |
+| macOS Apple Silicon | [concurtest-darwin-arm64.tar.gz](https://github.com/eumarumar/concurtest/releases/download/v0.1.0/concurtest-darwin-arm64.tar.gz) |
+| Windows x86-64 | [concurtest-windows-amd64.zip](https://github.com/eumarumar/concurtest/releases/download/v0.1.0/concurtest-windows-amd64.zip) |
 
-On Linux or macOS, extract and run the binary. This example uses Linux x86-64;
+On Linux or macOS, install into `~/.local/bin`. This example uses Linux x86-64;
 substitute the matching filename from the table:
 
 ```bash
-tar -xzf concurtest-linux-amd64.tar.gz
-./concurtest --help
+mkdir -p "$HOME/.local/bin"
+tar -xzf concurtest-linux-amd64.tar.gz -C "$HOME/.local/bin"
+export PATH="$HOME/.local/bin:$PATH"
+concurtest --help
 ```
+
+Add the `export` line to your shell startup file (such as `~/.zshrc`) to keep
+the command available in future terminals.
 
 On Windows, use PowerShell:
 
