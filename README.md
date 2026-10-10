@@ -85,8 +85,9 @@ the repository, not compiled binaries. See [GitHub's release documentation](http
 
 ## Quickstart — reproduce a race condition
 
-The included inventory service has a repeatable overselling bug. Running this
-demo requires Go 1.27 or newer, with no credentials or external services.
+The included inventory service has a repeatable overselling bug. Start it with
+Node.js or Go 1.27 or newer, with no credentials or external services. With
+Node.js and a downloaded ConcurTest binary, you do not need Go or npm packages.
 
 Get the example files:
 
@@ -95,7 +96,15 @@ git clone https://github.com/eumarumar/concurtest.git
 cd concurtest
 ```
 
-Start it in one terminal:
+In one terminal, choose either version of the demo.
+
+With Node.js:
+
+```bash
+node examples/vulnerable-inventory/node/server.js
+```
+
+With Go:
 
 ```bash
 go run ./examples/vulnerable-inventory
@@ -146,7 +155,7 @@ HTTP responses; success defaults to any 2xx status. See the
 
 | Example | Scenarios | Preparation |
 | --- | --- | --- |
-| [Inventory regression demo](examples/vulnerable-inventory/README.md) | [Observation](examples/vulnerable-inventory/observation-scenario.yaml), [history](examples/vulnerable-inventory/history-scenario.yaml) | Local Go service; no credentials |
+| [Inventory regression demo](examples/vulnerable-inventory/README.md) | [Observation](examples/vulnerable-inventory/observation-scenario.yaml), [history](examples/vulnerable-inventory/history-scenario.yaml) | Local Node.js or Go service; no credentials |
 | [Juice Shop case study](examples/juice-shop/README.md) | [Stock observation](examples/juice-shop/stock-scenario.yaml), [checkout history](examples/juice-shop/history-scenario.yaml) | Local Juice Shop, customer and accounting credentials, inventory access |
 
 Run scenarios against a shared target sequentially. The Juice Shop guide covers
@@ -219,3 +228,13 @@ go test ./...
 go test -race ./...
 go vet ./...
 ```
+
+For inventory demo changes, also run the Node.js server tests:
+
+```bash
+node --test examples/vulnerable-inventory/node/server.test.js
+```
+
+With `node` installed, the Go test suites also check both scenarios and failure
+reduction against isolated Node.js instances. Those integration tests skip when
+`node` is unavailable.

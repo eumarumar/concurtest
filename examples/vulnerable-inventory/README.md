@@ -1,21 +1,33 @@
 # Inventory regression demo
 
-This local Go application makes an inventory correctness bug repeatable. It
-requires no credentials or external services and listens on `127.0.0.1:8080`.
+This local application makes an inventory correctness bug repeatable. Choose
+the Node.js or Go version; both use the same routes and scenarios. They require
+no credentials or external services and listen on `127.0.0.1:8080`.
 
-From the repository root, start the application:
+From the repository root, start either version in one terminal.
+
+With Node.js (no npm packages or build step):
+
+```bash
+node examples/vulnerable-inventory/node/server.js
+```
+
+With Go 1.27 or newer:
 
 ```bash
 go run ./examples/vulnerable-inventory
 ```
 
-In another terminal, run either scenario against that same instance:
+In another terminal, use the installed ConcurTest binary to run either scenario
+against that same instance:
 
 ```bash
-go run ./cmd/concurtest run examples/vulnerable-inventory/observation-scenario.yaml
-go run ./cmd/concurtest run examples/vulnerable-inventory/history-scenario.yaml
+concurtest run examples/vulnerable-inventory/observation-scenario.yaml
+concurtest run examples/vulnerable-inventory/history-scenario.yaml
 ```
 
+With a downloaded ConcurTest binary and the Node.js demo, Go is not required.
+Go contributors can use `go run ./cmd/concurtest` in place of `concurtest`.
 Run the commands sequentially: both scenarios reset and modify the same stock.
 
 | Scenario | Declared check | Expected evidence |
@@ -46,18 +58,17 @@ the two accepted purchases.
 
 ## Why the failure repeats
 
-A mutex protects each stock access, but the availability check and decrement
-occur in separate critical sections. A two-request rendezvous deliberately
-makes both requests check the same remaining unit before either can decrement
-it. The service is free of this Go data race while still violating the inventory
-contract. The rendezvous belongs to the demonstration application; ConcurTest
-only sends the requests declared in YAML.
+Both versions use a two-request rendezvous that makes both requests check the
+same remaining unit before either can decrement it. In Go, a mutex protects
+each stock access, but the check and decrement occur in separate critical
+sections. In Node.js, each purchase awaits a promise after the check; the
+second purchase releases both requests. JavaScript runs on one event loop, but
+the asynchronous gap still permits the oversell. The rendezvous belongs to the
+demonstration application; ConcurTest only sends the requests declared in YAML.
 
 At least two concurrent purchase requests are required to release the rendezvous.
 A single purchase waits until reset, cancellation, or request timeout. The
 published scenarios and reduction search use concurrency of at least two.
 
-The CLI end-to-end tests load these checked-in scenarios, run them against an
-isolated application instance, and check the violation and reduction evidence.
 For an external application with additional setup requirements, see the
 [Juice Shop case study](../juice-shop/README.md).
