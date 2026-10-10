@@ -172,6 +172,12 @@ Use `--verbose` for retained trial evidence. See the
 | `1` | At least one trial demonstrated a violation |
 | `2` | No violation demonstrated; the run errored, was inconclusive, or was interrupted |
 
+A passing run means the declared invariant held across all tested trials. This
+provides evidence of correctness with respect to that invariant under the tested
+conditions, but does not guarantee correctness across every possible request
+timing, input, or application state. A violated run records evidence that the
+declared invariant was broken in an observed execution.
+
 Use the installed binary in CI and select JSON for structured evidence:
 
 ```bash
@@ -187,8 +193,8 @@ Report format does not change exit codes. The
 - Requests are static; YAML values do not expand environment variables or capture
   values from earlier responses.
 - Setup controls trial state; automatic rollback and resource isolation are not provided.
-- Passing trials do not prove correctness. Net stock changes can hide duplicate
-  effects, and successful HTTP responses alone do not prove business outcomes.
+- Net stock changes can hide duplicate effects, and successful HTTP responses
+  alone do not prove business outcomes.
 
 Licensed under [Apache 2.0](LICENSE). For contributions, read the
 [architecture](docs/architecture.md), keep changes focused, and run:

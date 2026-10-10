@@ -118,6 +118,20 @@ A zero or repeated decrement violates this check. A passing net change cannot
 rule out lost updates or duplicate orders: several checkouts may read the same
 stock and overwrite each other's decrements.
 
+For example, two checkout requests could both return HTTP 200 after this sequence:
+
+```text
+Checkout A reads stock: 100
+Checkout B reads stock: 100
+Checkout A writes stock: 99
+Checkout B writes stock: 99
+```
+
+The stock invariant (`change: -1`) passes because stock decreased by one. The
+history invariant (`maximum_successful_attempts: 1`) fails because two checkout
+requests succeeded. A passing invariant means the specific property held in the
+tested executions; other business rules may still have been violated.
+
 A previously captured local history run produced the following excerpt. It
 shows the baseline invariant evidence and reduced settings from that run;
 omitted sections and formatting reflect the earlier capture. It is not a
