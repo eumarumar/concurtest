@@ -43,7 +43,25 @@ export PATH="${concurtest_bin:-$(go env GOPATH)/bin}:$PATH"
 concurtest --help
 ```
 
-This updates `PATH` for the current terminal.
+This updates `PATH` for the current terminal only. To keep `concurtest` available
+in future terminals, add these two lines to your shell startup file:
+
+```bash
+concurtest_bin="$(go env GOBIN)"
+export PATH="${concurtest_bin:-$(go env GOPATH)/bin}:$PATH"
+```
+
+Choose the file for your shell and operating system. Run `echo "$SHELL"` if you
+are unsure which shell you use.
+
+| Shell | Startup file |
+| --- | --- |
+| Zsh (Linux or macOS) | `~/.zshrc` |
+| Bash (Linux) | `~/.bashrc` |
+| Bash (macOS) | `~/.bash_profile` |
+
+Create the file if it does not exist. Open a new terminal, then run
+`concurtest --help` to check that the change worked.
 
 ### Without Go
 
@@ -68,8 +86,14 @@ export PATH="$HOME/.local/bin:$PATH"
 concurtest --help
 ```
 
-Add the `export` line to your shell startup file (such as `~/.zshrc`) to keep
-the command available in future terminals.
+To keep the command available in future terminals, add this line to the startup
+file for your shell from the table above:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Open a new terminal, then run `concurtest --help` to check that the change worked.
 
 On Windows, use PowerShell:
 
