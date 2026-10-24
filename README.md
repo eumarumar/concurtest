@@ -2,6 +2,12 @@
 
 Test whether concurrent API requests violate application correctness rules.
 
+![ConcurTest detects two successful purchases against one item in stock, then reduces the failure to two concurrent requests.](docs/assets/inventory-oversell-demo.gif)
+
+One item in stock. Two purchases succeed. ConcurTest catches the oversell and
+reduces the failure to two concurrent requests.
+[Try the demo](#quickstart--reproduce-a-race-condition).
+
 ## What is ConcurTest?
 
 ConcurTest is a Go command-line tool that sends concurrent HTTP requests and
