@@ -247,6 +247,8 @@ Report format does not change exit codes. The
 - Requests are static; YAML values do not expand environment variables or capture
   values from earlier responses.
 - Setup controls trial state; automatic rollback and resource isolation are not provided.
+- Redirects are not followed. Observed automatic HTTP retries prevent a clean
+  pass, but can still cause duplicate effects. See [HTTP transport behavior](docs/scenarios.md#http-requests-retries-and-redirects).
 - Net stock changes can hide duplicate effects, and successful HTTP responses
   alone do not prove business outcomes.
 

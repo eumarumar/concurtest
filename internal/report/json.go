@@ -120,10 +120,11 @@ type responseJSON struct {
 }
 
 type executionJSON struct {
-	Request  requestJSON   `json:"request"`
-	Response *responseJSON `json:"response"`
-	Timing   *timingJSON   `json:"timing"`
-	Error    *errorJSON    `json:"error"`
+	Request       requestJSON   `json:"request"`
+	Response      *responseJSON `json:"response"`
+	Timing        *timingJSON   `json:"timing"`
+	Error         *errorJSON    `json:"error"`
+	RequestWrites int64         `json:"request_writes"`
 }
 
 type attemptJSON struct {
@@ -496,10 +497,11 @@ func executionResultJSON(execution *engine.HTTPExecution) *executionJSON {
 		}
 	}
 	return &executionJSON{
-		Request:  requestFromEngine(execution.Request),
-		Response: response,
-		Timing:   timing(execution.StartedAt, execution.CompletedAt),
-		Error:    optionalError(execution.Err),
+		Request:       requestFromEngine(execution.Request),
+		Response:      response,
+		Timing:        timing(execution.StartedAt, execution.CompletedAt),
+		Error:         optionalError(execution.Err),
+		RequestWrites: execution.RequestWrites,
 	}
 }
 

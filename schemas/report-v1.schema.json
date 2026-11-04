@@ -208,8 +208,9 @@
     "execution": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["request", "response", "timing", "error"],
+      "required": ["request", "response", "timing", "error", "request_writes"],
       "properties": {
+        "request_writes": { "type": "integer", "minimum": 0 },
         "request": { "$ref": "#/$defs/request" },
         "response": {
           "oneOf": [

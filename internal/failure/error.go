@@ -18,6 +18,7 @@ const (
 	CodeInvalidExecution          Code = "invalid_execution"
 	CodeRequestCreateFailed       Code = "request_create_failed"
 	CodeRequestSendFailed         Code = "request_send_failed"
+	CodeRequestRetried            Code = "request_retried"
 	CodeResponseFailed            Code = "response_failed"
 	CodeResponseReadFailed        Code = "response_read_failed"
 	CodeResponseCloseFailed       Code = "response_close_failed"

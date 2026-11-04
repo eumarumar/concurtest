@@ -601,6 +601,9 @@ func writeCompactStage(writer io.Writer, label string, execution *engine.HTTPExe
 }
 
 func writeCompactExecutionDetails(writer io.Writer, execution *engine.HTTPExecution, indent string) {
+	if execution.RequestWrites > 1 {
+		fmt.Fprintf(writer, "%sRequest writes  %d (automatic retry)\n", indent, execution.RequestWrites)
+	}
 	if execution.Response != nil && (len(execution.Response.Body) > 0 || execution.Response.BodyTruncated) {
 		fmt.Fprintf(writer, "%sResponse        %s\n", indent, boundedResponseExcerpt(execution.Response, maxCompactResponseExcerptBytes))
 	}
@@ -840,6 +843,7 @@ func writeExecution(writer io.Writer, execution *engine.HTTPExecution, indent st
 }
 
 func writeExecutionDetails(writer io.Writer, execution *engine.HTTPExecution, indent string) {
+	fmt.Fprintf(writer, "%sRequest writes  %d\n", indent, execution.RequestWrites)
 	if execution.Response != nil && (len(execution.Response.Body) > 0 || execution.Response.BodyTruncated) {
 		fmt.Fprintf(writer, "%sResponse        %s\n", indent, responseExcerpt(execution.Response))
 	}

@@ -292,6 +292,21 @@ The core model should not depend directly on a particular application framework 
 
 The target application is a black box from ConcurTest's perspective.
 
+Every engine HTTP execution stops at the original response instead of following
+redirects. ExecuteHTTP copies the caller's client to override redirect handling
+without mutating the client shared by workers; it reuses the supplied transport,
+timeout, and cookie jar.
+
+HTTP tracing counts completed request-header writes in a per-execution atomic
+counter. The counter is separate from the returned execution because transport
+callbacks can run on other goroutines. More than one observed write becomes a
+structured `request_retried` execution error, retaining the final response. The
+existing outcome rules then prevent a clean pass, stop failed setup/observation
+stages, and preserve demonstrated invariant violations. No retry scheduler or
+additional goroutine is introduced. This observes implicit retries rather than
+preventing them; buffering, incomplete writes, custom transports without tracing,
+and upstream proxy retries limit what it can establish about actual delivery.
+
 ## Configuration
 
 Human-readable configuration is expected to be YAML.

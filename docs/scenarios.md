@@ -6,6 +6,35 @@ is a complete runnable example. Start with the [quickstart](../README.md#quickst
 
 All commands below run from the repository root after installing ConcurTest.
 
+## HTTP requests, retries, and redirects
+
+Setup, operations, and observations use the same HTTP behavior. ConcurTest does
+not follow redirects: it records the original 3xx status and response body. Use
+the intended URL directly. A redirect during setup or observation fails that
+stage because those stages require 2xx responses. An operation's 3xx response
+is evaluated against the declared status rule; it is not a transport error.
+
+Go's HTTP transport can retry requests after connection failures, including
+POST requests carrying an `Idempotency-Key` or `X-Idempotency-Key` header.
+ConcurTest preserves these headers and connection reuse. It records observed
+request-header writes in each JSON execution's `request_writes` field. More
+than one produces a `request_retried` execution error while retaining the final
+response. Text reports show the repeated-write count alongside the error;
+verbose reports show the count for every execution.
+
+A retried operation makes an otherwise passing trial inconclusive (exit 2).
+A demonstrated invariant violation still takes precedence (exit 1). A retried
+setup or observation fails that stage. Retries are detected after the exchange;
+this does not prevent duplicate effects or roll them back.
+
+The count describes observed header writes, not confirmed delivery or committed
+effects. Headers may be buffered before a failed send, and incomplete header
+writes may not be counted. A zero count means no header writes were observed;
+custom Go transports that omit HTTP trace events cannot be checked this way.
+Retries within a proxy or the target are outside this evidence. A 3xx or other
+nonmatching operation response can still satisfy an upper-bound response rule
+without exercising useful work; choose the invariant with that limitation in mind.
+
 ## Prepare state before each trial
 
 The optional `setup` field defines preparation requests that run before each
