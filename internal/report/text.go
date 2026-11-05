@@ -148,6 +148,9 @@ func WriteTextWithOptions(writer io.Writer, input Input, options TextOptions) er
 
 	fmt.Fprintln(buffer, style.status(resultLabel))
 	fmt.Fprintln(buffer, aggregateSentence(input, counts))
+	if input.Result.WaitFailed() {
+		fmt.Fprintln(buffer, "Readiness or completion was not verified; no further trials were started.")
+	}
 
 	fmt.Fprintf(buffer, "\n%s\n", style.heading("Trials"))
 	fmt.Fprintf(buffer, "  Requested       %d\n", input.Result.Requested)
@@ -164,6 +167,8 @@ func WriteTextWithOptions(writer io.Writer, input Input, options TextOptions) er
 	fmt.Fprintf(buffer, "  Attempts        %d\n", input.Scenario.Attempts)
 	fmt.Fprintf(buffer, "  Concurrency     %d\n", input.Scenario.Concurrency)
 	fmt.Fprintf(buffer, "  Duration        %s\n", displayDuration(input.Result.Duration()))
+	writeWaitDefinition(buffer, "Readiness", input.Scenario.Readiness)
+	writeWaitDefinition(buffer, "Completion", input.Scenario.Completion)
 
 	writeInvariantSummary(buffer, style, input.Scenario.Invariant, firstEvaluation(input.Result.Trials))
 	fmt.Fprintf(buffer, "\n%s\n", style.heading("Operation outcomes"))
@@ -261,9 +266,9 @@ func validateTextInput(input Input) error {
 	}
 	if input.Reduction != nil && input.RunError == nil {
 		switch input.Reduction.Status {
-		case reduction.StatusSkipped:
+		case reduction.StatusSkipped, reduction.StatusStopped:
 			if input.Reduction.SelectedTrials != nil {
-				return errors.New("write text report: skipped reduction has a selected result")
+				return fmt.Errorf("write text report: %s reduction has a selected result", input.Reduction.Status)
 			}
 		case reduction.StatusReduced, reduction.StatusUnchanged, reduction.StatusLimited:
 			if input.Reduction.SelectedTrials == nil {
@@ -354,6 +359,9 @@ func writeReduction(writer io.Writer, style textStyle, scenario engine.Scenario,
 	}
 
 	switch result.Status {
+	case reduction.StatusStopped:
+		fmt.Fprintln(writer, "  Finding         Readiness or completion was not verified; no further candidates were started.")
+		writeInterruptedReductionEvidence(writer, style, scenario, result, options)
 	case reduction.StatusSkipped:
 		baseline := reductionSummary(result.Baseline)
 		outcomeProblems := false
@@ -393,6 +401,8 @@ func reductionStatusLabel(status reduction.Status, runErr error) string {
 		return "INTERRUPTED"
 	}
 	switch status {
+	case reduction.StatusStopped:
+		return "STOPPED"
 	case reduction.StatusSkipped:
 		return "NOT RUN"
 	case reduction.StatusReduced:
@@ -431,9 +441,23 @@ func writeInterruptedReductionEvidence(writer io.Writer, style textStyle, scenar
 	if candidate.Trials == nil {
 		return
 	}
-	fmt.Fprintf(writer, "  Interrupted at  %d attempts · concurrency %d\n", candidate.Candidate.Attempts, candidate.Candidate.Concurrency)
+	label := "Interrupted"
+	if result.Status == reduction.StatusStopped {
+		label = "Stopped"
+	}
+	fmt.Fprintf(writer, "  %-15s %d attempts · concurrency %d\n", label+" at", candidate.Candidate.Attempts, candidate.Candidate.Concurrency)
 	if options.Verbose {
-		writeTrialCollection(writer, style, scenario, *candidate.Trials, "Interrupted candidate")
+		writeTrialCollection(writer, style, scenario, *candidate.Trials, label+" candidate")
+	} else if len(candidate.Trials.Trials) > 0 {
+		trial := candidate.Trials.Trials[len(candidate.Trials.Trials)-1]
+		if trial.Status == engine.TrialStatusViolated {
+			if trial.Run.Readiness != nil && trial.Run.Readiness.Err != nil {
+				writeWaitEvidence(writer, "Readiness", trial.Run.Readiness, false, "    ")
+			}
+			if trial.Run.Completion != nil && trial.Run.Completion.Err != nil {
+				writeWaitEvidence(writer, "Completion", trial.Run.Completion, false, "    ")
+			}
+		}
 	}
 }
 
@@ -483,6 +507,8 @@ func firstTrialWithStatus(trials []engine.TrialResult, status engine.TrialStatus
 
 func writeCompactViolation(writer io.Writer, scenario engine.Scenario, trial engine.TrialResult) {
 	writeOutcomeEvidence(writer, trial.Run.Outcomes, "    ")
+	writeWaitEvidence(writer, "Readiness", trial.Run.Readiness, false, "    ")
+	writeWaitEvidence(writer, "Completion", trial.Run.Completion, false, "    ")
 	checkedSetup := 0
 	for _, step := range trial.Run.Setup {
 		if step.Assertion != nil && step.Assertion.Satisfied {
@@ -558,10 +584,14 @@ func writeCompactObservation(writer io.Writer, configured *engine.HTTPRequest, e
 
 func compactProblemSources(input Input) []compactTrialSource {
 	sources := make([]compactTrialSource, 0, 2)
-	if input.RunError != nil && input.Reduction != nil && len(input.Reduction.Candidates) > 0 {
+	if input.Reduction != nil && (input.RunError != nil || input.Reduction.Status == reduction.StatusStopped) && len(input.Reduction.Candidates) > 0 {
 		candidate := input.Reduction.Candidates[len(input.Reduction.Candidates)-1]
 		if candidate.Trials != nil {
-			sources = append(sources, compactTrialSource{label: "Interrupted candidate", trials: candidate.Trials.Trials})
+			label := "Interrupted candidate"
+			if input.Reduction.Status == reduction.StatusStopped {
+				label = "Stopped candidate"
+			}
+			sources = append(sources, compactTrialSource{label: label, trials: candidate.Trials.Trials})
 		}
 	}
 	return append(sources, compactTrialSource{label: "Baseline", trials: input.Result.Trials})
@@ -608,6 +638,9 @@ func writeCompactProblem(writer io.Writer, style textStyle, sources []compactTri
 }
 
 func writeCompactProblemExecutions(writer io.Writer, trial engine.TrialResult) {
+	if trial.Run.Readiness != nil && trial.Run.Readiness.Err != nil {
+		writeWaitEvidence(writer, "Readiness", trial.Run.Readiness, false, "    ")
+	}
 	for index, step := range trial.Run.Setup {
 		if stageExecutionProblem(&step.Execution) || (step.Assertion != nil && !step.Assertion.Satisfied) {
 			writeCompactStage(writer, setupLabel(index, step.Name), &step.Execution)
@@ -634,6 +667,9 @@ func writeCompactProblemExecutions(writer io.Writer, trial engine.TrialResult) {
 		}
 	}
 	writeCompactAttempts(writer, problemAttempts, "problem attempt")
+	if trial.Run.Completion != nil && trial.Run.Completion.Err != nil {
+		writeWaitEvidence(writer, "Completion", trial.Run.Completion, false, "    ")
+	}
 
 	if stageExecutionProblem(trial.Run.Observation) {
 		writeCompactStage(writer, "Observation", trial.Run.Observation)
@@ -709,6 +745,7 @@ func writeTrialEvidence(writer io.Writer, style textStyle, scenario engine.Scena
 	}
 	writeOutcomeEvidence(writer, trial.Run.Outcomes, "  ")
 	writeInvariant(writer, style, scenario.Invariant, trial.Run.Evaluation)
+	writeWaitEvidence(writer, "Readiness", trial.Run.Readiness, true, "  ")
 	for index, step := range scenario.Setup {
 		label := setupLabel(index, step.Name)
 		if index >= len(trial.Run.Setup) {
@@ -736,6 +773,7 @@ func writeTrialEvidence(writer io.Writer, style textStyle, scenario engine.Scena
 		}
 	}
 	writeAttempts(writer, trial.Run.History)
+	writeWaitEvidence(writer, "Completion", trial.Run.Completion, true, "  ")
 	writeObservation(writer, scenario.Observation, trial.Run.Observation)
 }
 

@@ -29,6 +29,9 @@ const (
 	// StatusLimited means the candidate limit was reached before the search
 	// space was exhausted.
 	StatusLimited Status = "limited"
+	// StatusStopped means readiness/completion was not verified, so no later
+	// trial or candidate may reset potentially unsettled target state.
+	StatusStopped Status = "stopped"
 )
 
 // Candidate identifies one attempt and concurrency combination.
@@ -116,6 +119,10 @@ func reduce(
 	if err != nil {
 		return result, failure.Wrap(failure.CodeReductionBaselineFailed, "run reduction baseline", err)
 	}
+	if baseline.WaitFailed() {
+		result.Status = StatusStopped
+		return result, nil
+	}
 	if !qualifies(summarize(baseline)) || !outcomesSatisfied(baseline) {
 		result.Status = StatusSkipped
 		return result, nil
@@ -143,6 +150,15 @@ func reduce(
 				fmt.Sprintf("evaluate reduction candidate with %d attempts and concurrency %d", candidate.Attempts, candidate.Concurrency),
 				candidateErr,
 			)
+		}
+		if trialsResult.WaitFailed() {
+			candidateResult.Trials = &trialsResult
+			if len(trialsResult.Trials) > 0 {
+				candidateResult.Err = trialsResult.Trials[len(trialsResult.Trials)-1].Err
+			}
+			result.Candidates = append(result.Candidates, candidateResult)
+			result.Status = StatusStopped
+			return result, nil
 		}
 		if qualifies(candidateResult.Summary) && candidateResult.OutcomeRequirementsMet {
 			candidateResult.Accepted = true

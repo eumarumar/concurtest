@@ -54,6 +54,8 @@ func (r TrialsResult) Duration() time.Duration {
 // from individual trials are retained in the result and do not stop later
 // trials. Parent-context cancellation stops the sequence and is returned as an
 // orchestration error after preserving any active trial's partial evidence.
+// An unverified readiness/completion condition stops the sequence as a retained
+// trial error, because starting another reset could overlap unfinished target work.
 func RunTrials(
 	ctx context.Context,
 	client *http.Client,
@@ -78,7 +80,6 @@ func RunTrials(
 		if err := ctx.Err(); err != nil {
 			return result, failure.Wrap(failure.CodeTrialSequenceInterrupted, "run trial sequence", err)
 		}
-
 		run, runErr := Run(ctx, client, scenario)
 		result.Trials = append(result.Trials, TrialResult{
 			Number: number,
@@ -90,6 +91,9 @@ func RunTrials(
 		if err := ctx.Err(); err != nil {
 			return result, failure.Wrap(failure.CodeTrialSequenceInterrupted, "run trial sequence", err)
 		}
+		if run.WaitFailed() {
+			return result, nil
+		}
 	}
 
 	return result, nil
@@ -97,6 +101,11 @@ func RunTrials(
 
 func classifyTrial(result RunResult, runErr error) TrialStatus {
 	if runErr != nil {
+		// A final response-count violation is independent of settlement. Keep
+		// that finding while retaining the completion error and stopping traffic.
+		if result.Outcome == RunOutcomeViolated && result.Completion != nil && result.Completion.Err != nil {
+			return TrialStatusViolated
+		}
 		return TrialStatusErrored
 	}
 	switch result.Outcome {

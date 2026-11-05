@@ -80,6 +80,8 @@ type documentConfig struct {
 	Target         strictString        `yaml:"target"`
 	RequestTimeout strictString        `yaml:"request_timeout"`
 	Setup          setupConfig         `yaml:"setup"`
+	Readiness      *waitConfig         `yaml:"readiness"`
+	Completion     *waitConfig         `yaml:"completion"`
 	Precondition   *preconditionConfig `yaml:"precondition"`
 	Operation      operationConfig     `yaml:"operation"`
 	Execution      executionConfig     `yaml:"execution"`
@@ -501,6 +503,19 @@ func (document documentConfig) definition() (Definition, error) {
 	}
 
 	var setup []engine.SetupStep
+	var readiness, completion *engine.WaitCondition
+	if document.Readiness != nil {
+		readiness, err = document.Readiness.condition("readiness", target)
+		if err != nil {
+			return Definition{}, err
+		}
+	}
+	if document.Completion != nil {
+		completion, err = document.Completion.condition("completion", target)
+		if err != nil {
+			return Definition{}, err
+		}
+	}
 	for index, step := range document.Setup {
 		request, err := step.Request.httpRequest(fmt.Sprintf("setup step %d", index+1), target)
 		if err != nil {
@@ -557,6 +572,8 @@ func (document documentConfig) definition() (Definition, error) {
 		Reduce:         bool(document.Execution.Reduce),
 		Scenario: engine.Scenario{
 			Setup:        setup,
+			Readiness:    readiness,
+			Completion:   completion,
 			Precondition: precondition,
 			Operation: engine.Operation{
 				Name:    operationName,

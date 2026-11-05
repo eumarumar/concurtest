@@ -192,6 +192,11 @@ Verify resets with optional setup response assertions and an initial-state
 `precondition`. A failed declared check stops the trial before operations and is
 reported as an invalid precondition. See [preparation checks](docs/scenarios.md#verify-setup-responses-and-initial-state).
 
+For deferred work, optional `readiness` and `completion` conditions can wait for
+an application-defined terminal signal before resetting or observing state.
+Unverified waits stop further trials and reduction candidates. See
+[bounded waits](docs/scenarios.md#wait-for-readiness-and-deferred-effects).
+
 ## Examples — Regression and Juice Shop
 
 | Example | Scenarios | Preparation |

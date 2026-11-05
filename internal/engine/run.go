@@ -60,6 +60,7 @@ type PreconditionExecution struct {
 // engine: ordered setup, one repeated operation, an optional observation, and
 // one invariant.
 type Scenario struct {
+	Readiness    *WaitCondition
 	Setup        []SetupStep
 	Precondition *Precondition
 	Operation    Operation
@@ -68,6 +69,7 @@ type Scenario struct {
 	Observation  *HTTPRequest
 	Invariant    Invariant
 	Outcomes     OutcomePolicy
+	Completion   *WaitCondition
 }
 
 // EffectiveOutcomes uses a history invariant's explicit response filter for
@@ -86,6 +88,8 @@ func (s Scenario) EffectiveOutcomes() OutcomePolicy {
 type RunResult struct {
 	StartedAt    time.Time
 	CompletedAt  time.Time
+	Readiness    *WaitResult
+	Completion   *WaitResult
 	Setup        []SetupExecution
 	Precondition *PreconditionExecution
 	// BaselineObservation is captured after setup and before operations only
@@ -118,6 +122,13 @@ func Run(
 
 	if err := validateRunInput(ctx, client, scenario); err != nil {
 		return result, err
+	}
+	if scenario.Readiness != nil {
+		wait := waitForCondition(ctx, client, *scenario.Readiness, "readiness")
+		result.Readiness = &wait
+		if wait.Err != nil {
+			return result, wait.Err
+		}
 	}
 
 	// Preparation belongs to this goroutine. Complete each response before
@@ -213,7 +224,20 @@ func Run(
 			MaximumSuccessfulAttempts: &evaluation,
 			Violated:                  evaluation.Violated,
 		}
-
+	}
+	if scenario.Completion != nil {
+		wait := waitForCondition(ctx, client, *scenario.Completion, "completion")
+		result.Completion = &wait
+		if wait.Err != nil {
+			// A response-count violation is already demonstrated independently
+			// of target settlement. Retain it while preventing further work.
+			if result.Evaluation != nil && result.Evaluation.Violated {
+				result.Outcome = RunOutcomeViolated
+			}
+			return result, wait.Err
+		}
+	}
+	if scenario.Invariant.MaximumSuccessfulAttempts != nil {
 		if scenario.Observation != nil {
 			observation := ExecuteHTTP(ctx, client, *scenario.Observation)
 			result.Observation = &observation
@@ -221,7 +245,7 @@ func Run(
 				if ctx.Err() != nil {
 					return result, observationErr
 				}
-				if !evaluation.Violated {
+				if !result.Evaluation.Violated {
 					return result, observationErr
 				}
 			}
@@ -298,6 +322,16 @@ func validateRunInput(ctx context.Context, client *http.Client, scenario Scenari
 			return failure.Wrap(failure.CodeInvalidExecution, "validate precondition assertion", err)
 		}
 	}
+	for _, wait := range []struct {
+		name       string
+		definition *WaitCondition
+	}{{"readiness", scenario.Readiness}, {"completion", scenario.Completion}} {
+		if wait.definition != nil {
+			if err := wait.definition.Validate(); err != nil {
+				return failure.Wrap(failure.CodeInvalidExecution, "validate "+wait.name+" condition", err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -308,6 +342,10 @@ func requireSuccessfulStage(stage string, execution HTTPExecution) error {
 			code = failure.CodeObservationFailed
 		} else if stage == "precondition" {
 			code = failure.CodePreconditionFailed
+		} else if stage == "readiness" {
+			code = failure.CodeReadinessFailed
+		} else if stage == "completion" {
+			code = failure.CodeCompletionFailed
 		}
 		return failure.Wrap(code, stage+" scenario request", execution.Err)
 	}

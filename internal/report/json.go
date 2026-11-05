@@ -76,6 +76,8 @@ type scenarioJSON struct {
 	Execution        executionConfigJSON         `json:"execution"`
 	Setup            []setupDefinitionJSON       `json:"setup"`
 	Precondition     *preconditionDefinitionJSON `json:"precondition"`
+	Readiness        *waitDefinitionJSON         `json:"readiness"`
+	Completion       *waitDefinitionJSON         `json:"completion"`
 	Operation        operationJSON               `json:"operation"`
 	Observation      *requestJSON                `json:"observation"`
 	Invariant        any                         `json:"invariant"`
@@ -177,6 +179,8 @@ type runEvidenceJSON struct {
 	Timing              *timingJSON                `json:"timing"`
 	Setup               []setupExecutionJSON       `json:"setup"`
 	Precondition        *preconditionExecutionJSON `json:"precondition"`
+	Readiness           *waitExecutionJSON         `json:"readiness"`
+	Completion          *waitExecutionJSON         `json:"completion"`
 	BaselineObservation *executionJSON             `json:"baseline_observation"`
 	History             historyJSON                `json:"history"`
 	Observation         *executionJSON             `json:"observation"`
@@ -398,6 +402,8 @@ func newRunReportJSON(input Input) (runReportJSON, error) {
 			},
 			Setup:        setupRequestsJSON(input.Scenario.Setup),
 			Precondition: preconditionDefinition(input.Scenario.Precondition),
+			Readiness:    waitDefinition(input.Scenario.Readiness),
+			Completion:   waitDefinition(input.Scenario.Completion),
 			Operation: operationJSON{
 				Name:    input.Scenario.Operation.Name,
 				Request: requestFromEngine(input.Scenario.Operation.Request),
@@ -489,6 +495,8 @@ func runResultJSON(result engine.RunResult) runEvidenceJSON {
 		Timing:              timing(result.StartedAt, result.CompletedAt),
 		Setup:               setupExecutionsJSON(result.Setup),
 		Precondition:        preconditionResult(result.Precondition),
+		Readiness:           waitExecution(result.Readiness),
+		Completion:          waitExecution(result.Completion),
 		BaselineObservation: executionResultJSON(result.BaselineObservation),
 		History:             historyJSON{Timing: timing(result.History.StartedAt, result.History.CompletedAt), Attempts: attempts},
 		Observation:         executionResultJSON(result.Observation),

@@ -134,9 +134,9 @@ are validated before traffic. They are separate from the one post-operation
 invariant and do not add a general expression language or multiple invariants.
 
 All preparation work belongs to the run goroutine. It completes each exchange,
-closes the body, and evaluates its check before starting another stage. No new
-goroutine, channel, retry, polling, or timeout mechanism is added. Existing request
-contexts and client timeouts apply to precondition requests. Exact JSON path
+closes the body, and evaluates its check before starting another stage. Immediate
+assertions add no polling workers or channels. Existing request contexts and
+client timeouts apply to precondition requests. Exact JSON path
 traversal is shared with integer invariants through RawMessage, avoiding float64
 coercion. Assertion definitions are cloned into evaluation evidence; unknown
 scalar values have nil pointers, distinct from false and zero.
@@ -150,9 +150,39 @@ the existing scenario runner. A failed check cannot qualify as a demonstrated
 post-operation violation or an eligible reduction candidate. Checks remain opt-in;
 they do not establish complete isolation or application quiescence.
 
+Optional readiness and completion conditions add bounded synchronous polling.
+Readiness runs before setup, protecting resets from known pending work; completion
+runs after operation workers join and before final observation. Change baselines
+remain before operations. Conditions use the existing scalar assertions against
+application-defined completion signals, never the business invariant as a retry
+condition. Only a valid nonmatching scalar causes another poll.
+
+Each wait has an explicit timeout and interval and at most 100 polls. A child
+context covers both HTTP execution and intervals. The run goroutine owns and
+stops interval timers; no polling goroutine or additional worker is introduced.
+Every response closes before another request can begin. All polls retain ordered
+execution and scalar evidence, with response bodies limited to 512 bytes after
+evaluation against the full captured body. Headers and request bodies are omitted
+from retained poll metadata, avoiding repeated large or private inputs.
+
+An unverified readiness/completion boundary stops the trial sequence instead of
+resetting potentially unfinished target work. The failed trial retains the error;
+RunTrials returns the recorded result, as with ordinary non-cancellation trial
+errors, but starts no later trial. Parent-context cancellation remains an
+orchestration error. An already-demonstrated response-count violation retains
+priority even when completion fails; no final state predicate is evaluated from
+an unsettled observation. Reduction similarly stops with no selection, retaining
+any active candidate and preserving the baseline finding. Its `stopped` status
+distinguishes incomplete settlement from a completed unsuccessful search.
+
+These are opt-in application-contract checks, not inferred quiescence. Their
+predicates must include all relevant deferred work. Stable values or a resettable
+pending counter cannot by themselves establish isolation or rule out later writes.
+
 Each trial retains its complete structured run evidence and is classified as
 passed, violated, inconclusive, or errored. Ordinary trial errors are recorded
-and later trials still run. Parent-context cancellation preserves the active
+and later trials still run, except that unverified waits prevent further resets.
+Parent-context cancellation preserves the active
 partial trial, stops new trials from starting, and makes the overall sequence
 incomplete.
 

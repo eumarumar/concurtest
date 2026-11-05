@@ -194,11 +194,57 @@
         { "type": "null" }
       ]
     },
+    "wait_definition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["request", "assertion", "timeout_ns", "interval_ns", "max_polls"],
+          "properties": {
+            "request": { "$ref": "#/$defs/request" },
+            "assertion": { "$ref": "#/$defs/assertion_definition" },
+            "timeout_ns": { "type": "integer", "minimum": 1 },
+            "interval_ns": { "type": "integer", "minimum": 1 },
+            "max_polls": { "type": "integer", "minimum": 1, "maximum": 100 }
+          }
+        },
+        { "type": "null" }
+      ]
+    },
+    "wait_execution": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["timing", "polls", "satisfied", "error"],
+          "properties": {
+            "timing": { "$ref": "#/$defs/nullable_timing" },
+            "satisfied": { "type": "boolean" },
+            "error": { "oneOf": [{ "$ref": "#/$defs/error" }, { "type": "null" }] },
+            "polls": {
+              "type": "array", "maxItems": 100,
+              "items": {
+                "type": "object", "additionalProperties": false,
+                "required": ["number", "execution", "assertion"],
+                "properties": {
+                  "number": { "type": "integer", "minimum": 1, "maximum": 100 },
+                  "execution": { "$ref": "#/$defs/execution" },
+                  "assertion": { "$ref": "#/$defs/assertion_evaluation" }
+                }
+              }
+            }
+          }
+        },
+        { "type": "null" }
+      ]
+    },
     "scenario": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "name", "target", "request_timeout_ns", "execution", "setup", "precondition", "operation", "observation", "invariant", "outcomes"],
+      "required": ["path", "name", "target", "request_timeout_ns", "execution", "setup", "precondition", "readiness", "completion", "operation", "observation", "invariant", "outcomes"],
       "properties": {
+        "readiness": { "$ref": "#/$defs/wait_definition" },
+        "completion": { "$ref": "#/$defs/wait_definition" },
         "precondition": { "$ref": "#/$defs/precondition_definition" },
         "outcomes": { "$ref": "#/$defs/outcome_policy" },
         "path": { "type": "string", "minLength": 1 },
@@ -398,8 +444,10 @@
         "evidence": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["outcome", "timing", "setup", "precondition", "history", "baseline_observation", "observation", "invariant_evaluation", "outcome_evaluation"],
+          "required": ["outcome", "timing", "setup", "precondition", "readiness", "completion", "history", "baseline_observation", "observation", "invariant_evaluation", "outcome_evaluation"],
           "properties": {
+            "readiness": { "$ref": "#/$defs/wait_execution" },
+            "completion": { "$ref": "#/$defs/wait_execution" },
             "precondition": { "$ref": "#/$defs/precondition_execution" },
             "outcome_evaluation": { "$ref": "#/$defs/outcome_evaluation" },
             "outcome": { "type": ["string", "null"], "enum": ["passed", "violated", "inconclusive", null] },
@@ -515,7 +563,7 @@
       "additionalProperties": false,
       "required": ["status", "timing", "max_candidates", "baseline", "candidates", "selection"],
       "properties": {
-        "status": { "enum": ["skipped", "reduced", "unchanged", "limited", "interrupted", "errored"] },
+        "status": { "enum": ["skipped", "reduced", "unchanged", "limited", "stopped", "interrupted", "errored"] },
         "timing": { "$ref": "#/$defs/nullable_timing" },
         "max_candidates": { "type": "integer", "minimum": 1 },
         "baseline": { "$ref": "#/$defs/baseline_reduction" },

@@ -238,10 +238,104 @@ existing bounded summaries.
 Checks are opt-in and only establish the declared scalar values at the moment
 they were read. A truthful reset acknowledgement does not prove the reset covered
 all relevant state. A fresh scalar value does not drain pending work, isolate
-external writes, or prevent state changing after the check. No rollback, polling,
-or automatic interpretation of response bodies is provided. When both a precondition
+external writes, or prevent state changing after the check. These immediate
+checks do not poll or roll back state. Use the bounded waits below when the
+application exposes a trustworthy completion signal. When both a precondition
 and a change invariant use the same URL, the change baseline remains a separate
 request after precondition verification.
+
+## Wait for readiness and deferred effects
+
+An accepted HTTP response can precede the actual effect. For queued or delayed
+work, declare a completion condition before evaluating final state. If reset can
+overlap work left from an earlier run, also declare readiness before setup:
+
+```yaml
+readiness:
+  request: {method: GET, path: /testing/work-state}
+  assert:
+    name: no pending work before reset
+    json_integer_path: [pending]
+    equals: 0
+  timeout: 2s
+  interval: 25ms
+  max_polls: 100
+
+completion:
+  request: {method: GET, path: /testing/work-state}
+  assert:
+    name: all accepted work has finished
+    json_integer_path: [pending]
+    equals: 0
+  timeout: 2s
+  interval: 25ms
+  max_polls: 100
+```
+
+The example requires an application endpoint with a truthful pending-work count
+covering all admitted work. Reset must not erase that accounting while work can
+still commit. A terminal job-status Boolean can also use `json_boolean_path` and
+`equals: true`. Waits use the same named Boolean/integer assertions as preparation
+checks; they do not test the post-operation invariant repeatedly until it passes.
+
+Both fields are optional. `request`, `assert`, a positive `timeout`, and a positive
+`interval` are required when a wait is declared. `max_polls` defaults to 100 and
+must be between 1 and 100. The first poll runs immediately. Only a complete 2xx
+response with a valid, nonmatching scalar is retried after the interval. The next
+poll starts after the previous body has closed and the interval has elapsed.
+The condition must match before either the deadline or poll limit is reached.
+HTTP failures, implicit transport retries, malformed/missing values, and truncated
+responses stop verification rather than being silently retried.
+
+The deadline covers the entire wait, including requests, response bodies, and
+intervals. The usual per-request timeout still applies if it is shorter. Parent
+cancellation interrupts requests and interval waits. No extra polling worker runs
+in parallel with the operation workers or setup.
+
+The execution order is:
+
+```text
+readiness → setup → precondition → change baseline → operations
+          → completion → final observation and invariant evaluation
+```
+
+Readiness therefore protects the reset itself. Completion runs after operation
+workers finish, including when their outcomes are uncertain, and also works with
+history invariants without a final observer. Every ordinary trial and reduction
+candidate repeats the declared waits. No wait runs unless it is configured.
+
+An unverified wait records `readiness_failed` or `completion_failed` and stops
+later trials and candidates, even though ordinary trial errors normally allow
+another trial. Final state is not observed or evaluated after failed completion.
+The active trial retains its error and all poll evidence. A response-count
+violation already demonstrated by completed responses remains a violation; a
+previously demonstrated violation also retains aggregate priority. Otherwise the
+run is errored (exit 2). Parent cancellation retains its existing interrupted-run
+behavior. The Go trial API retains a non-cancellation wait failure in `Trial.Err`
+and returns the stopped result; inspect its status, recorded count, and `WaitFailed()`.
+
+Reduction reports `stopped`, retains the stopped candidate's trials when present,
+and selects no reproduction from an unsettled search. A known baseline violation
+remains visible; stopping reduction does not turn it into a pass or claim a
+smaller result. New candidates cannot start after a failed wait.
+
+JSON includes nullable `scenario.readiness`/`scenario.completion` definitions and
+matching per-trial evidence with ordered, numbered polls, timing, scalar results,
+and errors. All polls are retained, up to the declared limit. Default text shows
+the last relevant poll and how many earlier polls were omitted; verbose text
+expands every poll. Polls retain safe request metadata and at most 512 response
+bytes each. Assertions use the full response before trimming, subject to the
+usual 1 MiB complete-body limit. A truncated excerpt can therefore accompany a
+verified scalar result. Request bodies and headers are not duplicated into poll
+evidence.
+
+These waits enforce the declared application's completion contract. A fixed
+sleep, an unchanged value, or a momentary zero counter alone cannot prove that no
+later write will occur. The condition must account for delayed work, including
+processing that continues after a client timeout. If it cannot, use stronger
+application-side accounting, a disposable namespace, or generation fencing;
+ConcurTest does not create those guarantees. Waits do not cancel target work,
+perform rollback, or establish isolation from unrelated writers.
 
 ## JSON integer constraints
 
@@ -342,6 +436,9 @@ attempts than the minimum accepted-response requirement are not tested. Rejected
 candidate summaries retain `outcome_requirements_met`, even when their full
 trial evidence is not retained. This does not yet preserve the original failure's
 identity or direction.
+
+Unverified readiness or completion stops the whole search with status `stopped`;
+the active candidate is retained and later candidates are not run.
 
 The search varies attempts and concurrency, trying smaller attempt counts first,
 with concurrency of at least two. Each candidate runs the configured number of
