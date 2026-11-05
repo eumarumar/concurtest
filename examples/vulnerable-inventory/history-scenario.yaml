@@ -20,6 +20,9 @@ execution:
   trials: 10
   reduce: true
 
+outcomes:
+  rejected_status_codes: [409]
+
 invariant:
   name: accepted purchases must not exceed stock
   maximum_successful_attempts: 1

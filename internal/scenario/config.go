@@ -84,6 +84,7 @@ type documentConfig struct {
 	Execution      executionConfig `yaml:"execution"`
 	Observation    *requestConfig  `yaml:"observation"`
 	Invariant      invariantConfig `yaml:"invariant"`
+	Outcomes       outcomeConfig   `yaml:"outcomes"`
 }
 
 type requestConfig struct {
@@ -201,6 +202,33 @@ type executionConfig struct {
 	Concurrency strictInt  `yaml:"concurrency"`
 	Trials      strictInt  `yaml:"trials"`
 	Reduce      strictBool `yaml:"reduce"`
+}
+
+type outcomeConfig struct {
+	AcceptedStatusCodes     strictIntList `yaml:"accepted_status_codes"`
+	RejectedStatusCodes     strictIntList `yaml:"rejected_status_codes"`
+	MinimumAcceptedAttempts *strictInt    `yaml:"minimum_accepted_attempts"`
+}
+
+func (config outcomeConfig) policy(attempts int, invariant engine.Invariant) (engine.OutcomePolicy, error) {
+	policy := engine.OutcomePolicy{}
+	if config.AcceptedStatusCodes.configured {
+		policy.AcceptedStatusCodes = make([]int, len(config.AcceptedStatusCodes.values))
+		for i, value := range config.AcceptedStatusCodes.values {
+			policy.AcceptedStatusCodes[i] = int(value)
+		}
+	}
+	if config.RejectedStatusCodes.configured {
+		policy.RejectedStatusCodes = make([]int, len(config.RejectedStatusCodes.values))
+		for i, value := range config.RejectedStatusCodes.values {
+			policy.RejectedStatusCodes[i] = int(value)
+		}
+	}
+	if config.MinimumAcceptedAttempts != nil {
+		policy.MinimumAcceptedAttempts = new(int(*config.MinimumAcceptedAttempts))
+	}
+	policy = (engine.Scenario{Outcomes: policy, Invariant: invariant}).EffectiveOutcomes()
+	return policy, policy.Validate(attempts)
 }
 
 type invariantConfig struct {
@@ -483,6 +511,10 @@ func (document documentConfig) definition() (Definition, error) {
 	if err != nil {
 		return Definition{}, err
 	}
+	outcomes, err := document.Outcomes.policy(int(document.Execution.Attempts), invariant)
+	if err != nil {
+		return Definition{}, err
+	}
 	var observation *engine.HTTPRequest
 	if document.Observation != nil {
 		request, err := document.Observation.httpRequest("observation", target)
@@ -508,6 +540,7 @@ func (document documentConfig) definition() (Definition, error) {
 			Concurrency: int(document.Execution.Concurrency),
 			Observation: observation,
 			Invariant:   invariant,
+			Outcomes:    outcomes,
 		},
 	}, nil
 }

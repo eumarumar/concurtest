@@ -27,7 +27,7 @@ func TestCLITransportEvidenceAndVerdicts(t *testing.T) {
 		{"retry state violation remains visible", "/purchase", "json_integer_path: [count]\n  maximum: 1", "violated", false, 1, 2},
 		{"retry setup stops operations", "/prepare", "maximum_successful_attempts: 1", "errored", false, 2, 0},
 		{"retry observation stops evaluation", "/state", "json_integer_path: [count]\n  minimum: 0", "errored", false, 2, 1},
-		{"redirect operation retains 302", "/purchase", "maximum_successful_attempts: 0", "passed", true, 0, 0},
+		{"redirect operation retains 302", "/purchase", "maximum_successful_attempts: 0", "inconclusive", true, 2, 0},
 		{"redirect setup stops operations", "/prepare", "maximum_successful_attempts: 1", "errored", true, 2, 0},
 		{"redirect observation stops evaluation", "/state", "json_integer_path: [count]\n  minimum: 0", "errored", true, 2, 1},
 	} {

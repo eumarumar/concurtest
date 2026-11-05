@@ -166,6 +166,14 @@ func WriteTextWithOptions(writer io.Writer, input Input, options TextOptions) er
 	fmt.Fprintf(buffer, "  Duration        %s\n", displayDuration(input.Result.Duration()))
 
 	writeInvariantSummary(buffer, style, input.Scenario.Invariant, firstEvaluation(input.Result.Trials))
+	fmt.Fprintf(buffer, "\n%s\n", style.heading("Operation outcomes"))
+	fmt.Fprintf(buffer, "  Accepted        %s\n", successfulStatuses(input.Scenario.EffectiveOutcomes().AcceptedStatusCodes))
+	rejections := "None"
+	if len(input.Scenario.Outcomes.RejectedStatusCodes) > 0 {
+		rejections = successfulStatuses(input.Scenario.Outcomes.RejectedStatusCodes)
+	}
+	fmt.Fprintf(buffer, "  Rejected        %s\n", rejections)
+	fmt.Fprintf(buffer, "  Required        At least %d accepted per trial\n", input.Scenario.Outcomes.MinimumAccepted())
 	if input.RunError != nil {
 		writeRunProblem(buffer, style, input.RunError)
 	}
@@ -348,7 +356,15 @@ func writeReduction(writer io.Writer, style textStyle, scenario engine.Scenario,
 	switch result.Status {
 	case reduction.StatusSkipped:
 		baseline := reductionSummary(result.Baseline)
-		if baseline.Inconclusive > 0 || baseline.Errored > 0 {
+		outcomeProblems := false
+		for _, trial := range result.Baseline.Trials {
+			if trial.Run.Outcomes != nil && !trial.Run.Outcomes.Trustworthy() {
+				outcomeProblems = true
+			}
+		}
+		if outcomeProblems {
+			fmt.Fprintln(writer, "  Finding         Baseline operation outcomes did not meet the declared requirements; reduction needs usable outcomes.")
+		} else if baseline.Inconclusive > 0 || baseline.Errored > 0 {
 			fmt.Fprintf(writer, "  Finding         Baseline had %d inconclusive and %d errored trials; reduction needs clean results.\n", baseline.Inconclusive, baseline.Errored)
 		} else {
 			fmt.Fprintf(writer, "  Finding         Baseline had %d violations in %d trials; a strict majority is required.\n", baseline.Violated, baseline.Requested)
@@ -397,6 +413,9 @@ func writeCandidateResult(writer io.Writer, candidate reduction.CandidateResult)
 		candidate.Summary.Completed, candidate.Summary.Requested, displayDuration(candidate.Summary.Duration()))
 	if candidate.Accepted {
 		fmt.Fprint(writer, " · selected")
+	}
+	if !candidate.OutcomeRequirementsMet {
+		fmt.Fprint(writer, " · outcome requirements not met")
 	}
 	if candidate.Err != nil {
 		fmt.Fprintf(writer, " · error %s", quoted(candidate.Err.Error()))
@@ -463,6 +482,7 @@ func firstTrialWithStatus(trials []engine.TrialResult, status engine.TrialStatus
 }
 
 func writeCompactViolation(writer io.Writer, scenario engine.Scenario, trial engine.TrialResult) {
+	writeOutcomeEvidence(writer, trial.Run.Outcomes, "    ")
 	if trial.Run.BaselineObservation != nil {
 		fmt.Fprintln(writer, "    Baseline observation")
 		execution := trial.Run.BaselineObservation
@@ -562,9 +582,12 @@ func writeCompactProblem(writer io.Writer, style textStyle, sources []compactTri
 	if trial.Err != nil {
 		fmt.Fprintf(writer, "    %s\n", quoted(trial.Err.Error()))
 	} else if status == engine.TrialStatusInconclusive {
-		failed := failedAttemptCount(trial.Run.History)
-		fmt.Fprintf(writer, "    %d/%d attempts failed or did not start.\n", failed, len(trial.Run.History.Attempts))
+		if trial.Run.Outcomes == nil {
+			failed := failedAttemptCount(trial.Run.History)
+			fmt.Fprintf(writer, "    %d/%d attempts failed or did not start.\n", failed, len(trial.Run.History.Attempts))
+		}
 	}
+	writeOutcomeEvidence(writer, trial.Run.Outcomes, "    ")
 	writeCompactProblemExecutions(writer, trial)
 	if omitted := count - 1; omitted > 0 {
 		fmt.Fprintf(writer, "    %d more %s %s not shown.\n", omitted, status, pluralize("trial", omitted))
@@ -579,8 +602,15 @@ func writeCompactProblemExecutions(writer io.Writer, trial engine.TrialResult) {
 	}
 
 	problemAttempts := make([]engine.Attempt, 0)
+	unexpectedIDs := make(map[int]bool)
+	if trial.Run.Outcomes != nil {
+		for _, id := range trial.Run.Outcomes.UnexpectedAttemptIDs {
+			unexpectedIDs[id] = true
+		}
+	}
 	for _, attempt := range trial.Run.History.Attempts {
-		if attempt.Execution == nil || attempt.Execution.Err != nil || attempt.Execution.Response == nil {
+		unexpected := unexpectedIDs[attempt.ID]
+		if attempt.Execution == nil || attempt.Execution.Err != nil || attempt.Execution.Response == nil || unexpected {
 			problemAttempts = append(problemAttempts, attempt)
 		}
 	}
@@ -653,9 +683,12 @@ func writeTrialEvidence(writer io.Writer, style textStyle, scenario engine.Scena
 	if trial.Err != nil {
 		writeTrialProblem(writer, style, trial.Err)
 	} else if trial.Status == engine.TrialStatusInconclusive {
-		failed := failedAttemptCount(trial.Run.History)
-		fmt.Fprintf(writer, "  Finding         %d of %d attempts failed or did not start, so this trial cannot be reported as a pass.\n", failed, len(trial.Run.History.Attempts))
+		if trial.Run.Outcomes == nil {
+			failed := failedAttemptCount(trial.Run.History)
+			fmt.Fprintf(writer, "  Finding         %d of %d attempts failed or did not start, so this trial cannot be reported as a pass.\n", failed, len(trial.Run.History.Attempts))
+		}
 	}
+	writeOutcomeEvidence(writer, trial.Run.Outcomes, "  ")
 	writeInvariant(writer, style, scenario.Invariant, trial.Run.Evaluation)
 	for index, step := range scenario.Setup {
 		label := setupLabel(index, step.Name)
@@ -777,6 +810,33 @@ func successfulStatuses(statuses []int) string {
 		formatted = append(formatted, label)
 	}
 	return strings.Join(formatted, ", ")
+}
+
+func writeOutcomeEvidence(writer io.Writer, evaluation *engine.OutcomeEvaluation, indent string) {
+	if evaluation == nil {
+		return
+	}
+	fmt.Fprintf(writer, "%sOutcomes        %d accepted · %d rejected · %d unexpected · %d unknown\n", indent,
+		len(evaluation.AcceptedAttemptIDs), len(evaluation.RejectedAttemptIDs), len(evaluation.UnexpectedAttemptIDs), len(evaluation.UnknownAttemptIDs))
+	if len(evaluation.UnexpectedAttemptIDs) > 0 {
+		fmt.Fprintf(writer, "%sUnexpected      %s; these responses do not establish whether effects committed.\n", indent, boundedAttemptIDs(evaluation.UnexpectedAttemptIDs))
+	}
+	if len(evaluation.UnknownAttemptIDs) > 0 {
+		fmt.Fprintf(writer, "%sUnknown         %s; effects are uncertain.\n", indent, boundedAttemptIDs(evaluation.UnknownAttemptIDs))
+	}
+	if len(evaluation.AcceptedAttemptIDs) < evaluation.Policy.MinimumAccepted() {
+		minimum := evaluation.Policy.MinimumAccepted()
+		fmt.Fprintf(writer, "%sCoverage        Required at least %d accepted %s; observed %d.\n", indent, minimum, pluralize("response", minimum), len(evaluation.AcceptedAttemptIDs))
+	}
+}
+
+func boundedAttemptIDs(ids []int) string {
+	shown := min(len(ids), maxCompactAttempts)
+	value := attemptIDs(ids[:shown])
+	if len(ids) > shown {
+		value += fmt.Sprintf(" (+%d more)", len(ids)-shown)
+	}
+	return value
 }
 
 func attemptIDs(ids []int) string {

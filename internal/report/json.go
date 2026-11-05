@@ -77,6 +77,22 @@ type scenarioJSON struct {
 	Operation        operationJSON       `json:"operation"`
 	Observation      *requestJSON        `json:"observation"`
 	Invariant        any                 `json:"invariant"`
+	Outcomes         outcomePolicyJSON   `json:"outcomes"`
+}
+
+type outcomePolicyJSON struct {
+	AcceptedStatusCodes     []int `json:"accepted_status_codes"`
+	RejectedStatusCodes     []int `json:"rejected_status_codes"`
+	MinimumAcceptedAttempts int   `json:"minimum_accepted_attempts"`
+}
+
+type outcomeEvaluationJSON struct {
+	AcceptedAttemptIDs      []int `json:"accepted_attempt_ids"`
+	RejectedAttemptIDs      []int `json:"rejected_attempt_ids"`
+	UnexpectedAttemptIDs    []int `json:"unexpected_attempt_ids"`
+	UnknownAttemptIDs       []int `json:"unknown_attempt_ids"`
+	MinimumAcceptedAttempts int   `json:"minimum_accepted_attempts"`
+	RequirementsMet         bool  `json:"requirements_met"`
 }
 
 type jsonIntegerDefinitionJSON struct {
@@ -155,13 +171,14 @@ type maximumSuccessfulAttemptsEvaluationJSON struct {
 }
 
 type runEvidenceJSON struct {
-	Outcome             *string              `json:"outcome"`
-	Timing              *timingJSON          `json:"timing"`
-	Setup               []setupExecutionJSON `json:"setup"`
-	BaselineObservation *executionJSON       `json:"baseline_observation"`
-	History             historyJSON          `json:"history"`
-	Observation         *executionJSON       `json:"observation"`
-	InvariantEvaluation any                  `json:"invariant_evaluation"`
+	Outcome             *string                `json:"outcome"`
+	Timing              *timingJSON            `json:"timing"`
+	Setup               []setupExecutionJSON   `json:"setup"`
+	BaselineObservation *executionJSON         `json:"baseline_observation"`
+	History             historyJSON            `json:"history"`
+	Observation         *executionJSON         `json:"observation"`
+	InvariantEvaluation any                    `json:"invariant_evaluation"`
+	OutcomeEvaluation   *outcomeEvaluationJSON `json:"outcome_evaluation"`
 }
 
 type trialJSON struct {
@@ -178,13 +195,14 @@ type baselineReductionJSON struct {
 }
 
 type candidateReductionJSON struct {
-	Number      int                  `json:"number"`
-	Attempts    int                  `json:"attempts"`
-	Concurrency int                  `json:"concurrency"`
-	Accepted    bool                 `json:"accepted"`
-	Summary     candidateSummaryJSON `json:"summary"`
-	Error       *errorJSON           `json:"error"`
-	Trials      []trialJSON          `json:"trials"`
+	Number                 int                  `json:"number"`
+	Attempts               int                  `json:"attempts"`
+	Concurrency            int                  `json:"concurrency"`
+	Accepted               bool                 `json:"accepted"`
+	OutcomeRequirementsMet bool                 `json:"outcome_requirements_met"`
+	Summary                candidateSummaryJSON `json:"summary"`
+	Error                  *errorJSON           `json:"error"`
+	Trials                 []trialJSON          `json:"trials"`
 }
 
 type candidateSummaryJSON struct {
@@ -382,6 +400,11 @@ func newRunReportJSON(input Input) (runReportJSON, error) {
 			},
 			Observation: configuredRequest(input.Scenario.Observation),
 			Invariant:   invariantDefinition(input.Scenario.Invariant),
+			Outcomes: outcomePolicyJSON{
+				AcceptedStatusCodes:     input.Scenario.EffectiveOutcomes().AcceptedStatusCodes,
+				RejectedStatusCodes:     append([]int{}, input.Scenario.Outcomes.RejectedStatusCodes...),
+				MinimumAcceptedAttempts: input.Scenario.Outcomes.MinimumAccepted(),
+			},
 		},
 		Summary:      resultSummary(input.Result),
 		Trials:       trialsJSON(input.Result.Trials),
@@ -465,6 +488,21 @@ func runResultJSON(result engine.RunResult) runEvidenceJSON {
 		History:             historyJSON{Timing: timing(result.History.StartedAt, result.History.CompletedAt), Attempts: attempts},
 		Observation:         executionResultJSON(result.Observation),
 		InvariantEvaluation: invariantEvaluation(result.Evaluation),
+		OutcomeEvaluation:   operationOutcomesJSON(result.Outcomes),
+	}
+}
+
+func operationOutcomesJSON(evaluation *engine.OutcomeEvaluation) *outcomeEvaluationJSON {
+	if evaluation == nil {
+		return nil
+	}
+	return &outcomeEvaluationJSON{
+		AcceptedAttemptIDs:      append([]int{}, evaluation.AcceptedAttemptIDs...),
+		RejectedAttemptIDs:      append([]int{}, evaluation.RejectedAttemptIDs...),
+		UnexpectedAttemptIDs:    append([]int{}, evaluation.UnexpectedAttemptIDs...),
+		UnknownAttemptIDs:       append([]int{}, evaluation.UnknownAttemptIDs...),
+		MinimumAcceptedAttempts: evaluation.Policy.MinimumAccepted(),
+		RequirementsMet:         evaluation.Trustworthy(),
 	}
 }
 
@@ -564,13 +602,14 @@ func reductionResultJSON(input Input) *reductionJSON {
 			retained = trialsJSON(candidate.Trials.Trials)
 		}
 		candidates[index] = candidateReductionJSON{
-			Number:      index + 1,
-			Attempts:    candidate.Candidate.Attempts,
-			Concurrency: candidate.Candidate.Concurrency,
-			Accepted:    candidate.Accepted,
-			Summary:     reductionSummaryJSON(candidate.Summary),
-			Error:       optionalError(candidate.Err),
-			Trials:      retained,
+			Number:                 index + 1,
+			Attempts:               candidate.Candidate.Attempts,
+			Concurrency:            candidate.Candidate.Concurrency,
+			Accepted:               candidate.Accepted,
+			OutcomeRequirementsMet: candidate.OutcomeRequirementsMet,
+			Summary:                reductionSummaryJSON(candidate.Summary),
+			Error:                  optionalError(candidate.Err),
+			Trials:                 retained,
 		}
 	}
 	return &reductionJSON{

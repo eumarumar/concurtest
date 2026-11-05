@@ -182,6 +182,25 @@ attempt ID and the stable suffix beyond the configured maximum. Missing or
 failed executions do not count as successful; they keep a non-violating trial
 from being reported as a trustworthy pass.
 
+Operation outcome policy is a separate check of whether the trial exercised its
+declared HTTP response contract. The default accepts the history invariant's
+explicit status filter, or 2xx otherwise; expects no rejection statuses; and
+requires one accepted response per trial. Scenarios can declare acceptance and
+expected rejection lists and a minimum acceptance count, including an explicit
+zero for rejection-only tests. Status sets must be disjoint and the minimum must
+fit the configured attempt count. Validation happens before setup can send traffic.
+
+After operation workers join, a synchronous evaluator partitions stable attempt
+IDs into accepted, rejected, unexpected, and unknown outcomes. Missing or failed
+exchanges are unknown even if response headers were captured. HTTP statuses do
+not change transport errors or imply whether effects committed. The policy and
+evaluation are snapshotted into evidence without adding goroutines or shared
+state. Non-violating trials with insufficient coverage become inconclusive;
+demonstrated violations retain precedence. State observation still runs after
+unexpected responses. Reduction additionally requires usable outcomes in every
+baseline and candidate trial, and preserves that decision in candidate summaries.
+Matching failure identity remains a separate concern.
+
 ### Observation
 
 An observation reads externally visible state from the target system. It is

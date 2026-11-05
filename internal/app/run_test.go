@@ -464,7 +464,7 @@ func TestRunUsesRequestTimeoutAndReturnsInconclusive(t *testing.T) {
 	}
 	assertOutputContains(t, stdout.String(),
 		"INCONCLUSIVE",
-		"1/1 attempts failed or did not start",
+		"0 accepted · 0 rejected · 0 unexpected · 1 unknown",
 		"Client.Timeout exceeded",
 	)
 }

@@ -181,6 +181,13 @@ Integer checks require an observation request. History checks count qualifying
 HTTP responses; success defaults to any 2xx status. See the
 [scenario reference](docs/scenarios.md) for syntax and evaluation rules.
 
+A clean pass also requires usable operation responses in each trial. The default
+requires at least one accepted response and no unexpected or unknown outcomes.
+Declare expected rejections with `outcomes.rejected_status_codes`; use
+`outcomes.minimum_accepted_attempts: 0` for intentional rejection-only tests.
+See [operation outcomes](docs/scenarios.md#operation-outcomes-and-useful-work)
+for acceptance filters and limitations.
+
 ## Examples — Regression and Juice Shop
 
 | Example | Scenarios | Preparation |

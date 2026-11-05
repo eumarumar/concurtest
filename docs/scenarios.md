@@ -32,8 +32,72 @@ effects. Headers may be buffered before a failed send, and incomplete header
 writes may not be counted. A zero count means no header writes were observed;
 custom Go transports that omit HTTP trace events cannot be checked this way.
 Retries within a proxy or the target are outside this evidence. A 3xx or other
-nonmatching operation response can still satisfy an upper-bound response rule
-without exercising useful work; choose the invariant with that limitation in mind.
+nonmatching response can satisfy the literal upper-bound invariant, but the
+operation outcome requirements below must also be met for a clean pass.
+
+## Operation outcomes and useful work
+
+An invariant holding is only one condition for a passing trial. Each trial must
+also meet its HTTP outcome policy. Without an `outcomes` section, ConcurTest
+requires at least one accepted response and treats other statuses as unexpected.
+Acceptance uses the history invariant's `successful_status_codes` when that
+list is configured; otherwise it accepts HTTP 200–299.
+
+Declare expected rejections for the application you are testing:
+
+```yaml
+outcomes:
+  accepted_status_codes: [201]
+  rejected_status_codes: [400, 409]
+  minimum_accepted_attempts: 1
+```
+
+This example requires at least one 201 response in each trial, allows 400 and
+409 as expected rejections, and treats every other status as unexpected. All
+fields are optional. `accepted_status_codes` overrides the default acceptance
+filter; `rejected_status_codes` defaults to no expected rejections. Explicit
+status lists must use unique integers from 100 through 599. Acceptance and
+rejection lists must not overlap, including the effective default acceptance
+filter. An explicitly empty acceptance list is invalid.
+
+`minimum_accepted_attempts` defaults to 1 and must be between zero and the
+configured attempt count. It counts clean accepted responses within each trial;
+earlier trials, setup, and observations cannot satisfy it. For a test deliberately
+expecting every operation to be rejected, declare a zero minimum:
+
+```yaml
+outcomes:
+  rejected_status_codes: [409]
+  minimum_accepted_attempts: 0
+```
+
+A zero minimum does not excuse unexpected statuses or exchange errors. A history
+rule requiring zero successful responses usually needs this explicit minimum.
+The history invariant's status filter still determines what its upper bound
+counts. An explicit acceptance override does not rewrite that invariant.
+
+Outcome evidence separates accepted and rejected responses from unexpected
+responses and unknown executions. Unknown executions include missing attempts,
+transport failures, implicit retries, and response read/close failures. A clean
+HTTP 500 remains an HTTP response rather than becoming a transport error; its
+effects are uncertain. Expected rejection is also a declared response contract,
+not a verified absence of side effects.
+
+Unexpected responses, unknown executions, or a missed minimum make an otherwise
+passing trial inconclusive (exit 2). A demonstrated invariant violation still
+takes precedence (exit 1). State observation continues after unexpected operation
+responses, allowing a state rule to expose effects committed before a 500.
+Setup and observation retain their separate 2xx requirements.
+
+Text reports show the effective policy, outcome counts, and reasons for missing
+coverage. JSON includes `scenario.outcomes` and each trial's `outcome_evaluation`
+with stable attempt-ID lists, the effective minimum, and `requirements_met`.
+The evaluation is null when no operation history was available.
+
+These checks establish response coverage under the declared contract. A 2xx
+response can still mean empty work, an idempotent replay, or an application error
+inside the body. Choose explicit acceptance statuses and meaningful state checks
+where needed; response counts alone do not establish durable business effects.
 
 ## Prepare state before each trial
 
@@ -192,8 +256,13 @@ as a paid order.
 
 Enable reduction with `execution.reduce: true`. Reduction requires setup,
 at least three trials, and at least two attempts and two concurrent requests.
-It starts only after a majority of the original trials demonstrate the violation
-and none are errored or inconclusive.
+It starts only after a majority of the original trials demonstrate the violation,
+none are errored or inconclusive, and every trial meets its operation outcome
+requirements. Candidates must meet the same requirements. Candidates with fewer
+attempts than the minimum accepted-response requirement are not tested. Rejected
+candidate summaries retain `outcome_requirements_met`, even when their full
+trial evidence is not retained. This does not yet preserve the original failure's
+identity or direction.
 
 The search varies attempts and concurrency, trying smaller attempt counts first,
 with concurrency of at least two. Each candidate runs the configured number of

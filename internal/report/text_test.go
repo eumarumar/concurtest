@@ -347,7 +347,7 @@ func TestWriteTextCompactPrefersSelectedReductionEvidence(t *testing.T) {
 		Candidates: []reduction.CandidateResult{{
 			Candidate: reduction.Candidate{Attempts: 2, Concurrency: 2},
 			Summary:   reduction.TrialSummary{Requested: 10, Completed: 10, Violated: 10},
-			Accepted:  true, Trials: &selected,
+			Accepted:  true, OutcomeRequirementsMet: true, Trials: &selected,
 		}},
 		Selected: reduction.Candidate{Attempts: 2, Concurrency: 2}, SelectedTrials: &selected, Status: reduction.StatusReduced,
 	}

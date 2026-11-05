@@ -24,6 +24,9 @@ observation:
   method: GET
   path: /state
 
+outcomes:
+  rejected_status_codes: [409]
+
 invariant:
   name: final stock must be non-negative
   json_integer_path: [stock]

@@ -13,14 +13,14 @@ import (
 type RunOutcome string
 
 const (
-	// RunOutcomePassed means the invariant held and every operation completed
-	// without an execution error.
+	// RunOutcomePassed means the invariant held and the trial met its operation
+	// outcome requirements without unknown executions.
 	RunOutcomePassed RunOutcome = "passed"
 	// RunOutcomeViolated means the recorded evidence demonstrated an invariant
 	// violation.
 	RunOutcomeViolated RunOutcome = "violated"
-	// RunOutcomeInconclusive means the invariant appeared to hold, but at least
-	// one operation did not produce a clean execution result.
+	// RunOutcomeInconclusive means the invariant appeared to hold, but the
+	// operation outcome requirements were not met.
 	RunOutcomeInconclusive RunOutcome = "inconclusive"
 )
 
@@ -50,6 +50,18 @@ type Scenario struct {
 	Concurrency int
 	Observation *HTTPRequest
 	Invariant   Invariant
+	Outcomes    OutcomePolicy
+}
+
+// EffectiveOutcomes uses a history invariant's explicit response filter for
+// acceptance when the outcome policy does not supply its own filter. Otherwise
+// the policy's nil filter retains the default 2xx meaning.
+func (s Scenario) EffectiveOutcomes() OutcomePolicy {
+	policy := s.Outcomes
+	if policy.AcceptedStatusCodes == nil && s.Invariant.MaximumSuccessfulAttempts != nil {
+		policy.AcceptedStatusCodes = s.Invariant.MaximumSuccessfulAttempts.SuccessfulStatusCodes
+	}
+	return policy
 }
 
 // RunResult records each attempted setup step and later scenario stages.
@@ -64,6 +76,7 @@ type RunResult struct {
 	History             History
 	Observation         *HTTPExecution
 	Evaluation          *InvariantEvaluation
+	Outcomes            *OutcomeEvaluation
 	Outcome             RunOutcome
 }
 
@@ -134,6 +147,13 @@ func Run(
 		scenario.Concurrency,
 	)
 	result.History = history
+	if len(history.Attempts) > 0 {
+		outcomes, outcomeErr := EvaluateOutcomes(scenario.EffectiveOutcomes(), history)
+		if outcomeErr != nil {
+			return result, failure.Wrap(failure.CodeInvalidExecution, "evaluate operation outcomes", outcomeErr)
+		}
+		result.Outcomes = &outcomes
+	}
 	if err != nil {
 		return result, failure.Wrap(failure.CodeOperationBatchFailed, "execute scenario operations", err)
 	}
@@ -192,7 +212,7 @@ func Run(
 	switch {
 	case result.Evaluation.Violated:
 		result.Outcome = RunOutcomeViolated
-	case historyHasExecutionErrors(history):
+	case result.Outcomes == nil || !result.Outcomes.Trustworthy():
 		result.Outcome = RunOutcomeInconclusive
 	default:
 		result.Outcome = RunOutcomePassed
@@ -220,6 +240,9 @@ func validateRunInput(ctx context.Context, client *http.Client, scenario Scenari
 	if scenario.Invariant.JSONInteger != nil && scenario.Observation == nil {
 		return failure.New(failure.CodeInvariantInvalid, "validate scenario invariant: JSON integer requires an observation")
 	}
+	if err := scenario.EffectiveOutcomes().Validate(scenario.Attempts); err != nil {
+		return failure.Wrap(failure.CodeInvalidExecution, "validate operation outcomes", err)
+	}
 	return nil
 }
 
@@ -238,13 +261,4 @@ func requireSuccessfulStage(stage string, execution HTTPExecution) error {
 		return failure.New(failure.CodeUnexpectedHTTPStatus, fmt.Sprintf("%s scenario request: unexpected HTTP status %d", stage, execution.Response.StatusCode))
 	}
 	return nil
-}
-
-func historyHasExecutionErrors(history History) bool {
-	for _, attempt := range history.Attempts {
-		if attempt.Execution == nil || attempt.Execution.Err != nil || attempt.Execution.Response == nil {
-			return true
-		}
-	}
-	return false
 }

@@ -57,11 +57,12 @@ func (s TrialSummary) Duration() time.Duration {
 // CandidateResult records one candidate evaluation. Trials is retained only
 // for the selected candidate or an interrupted active candidate.
 type CandidateResult struct {
-	Candidate Candidate
-	Summary   TrialSummary
-	Accepted  bool
-	Trials    *engine.TrialsResult
-	Err       error
+	Candidate              Candidate
+	Summary                TrialSummary
+	Accepted               bool
+	OutcomeRequirementsMet bool
+	Trials                 *engine.TrialsResult
+	Err                    error
 }
 
 // Result records the baseline, ordered candidate summaries, and any selected
@@ -115,7 +116,7 @@ func reduce(
 	if err != nil {
 		return result, failure.Wrap(failure.CodeReductionBaselineFailed, "run reduction baseline", err)
 	}
-	if !qualifies(summarize(baseline)) {
+	if !qualifies(summarize(baseline)) || !outcomesSatisfied(baseline) {
 		result.Status = StatusSkipped
 		return result, nil
 	}
@@ -129,9 +130,10 @@ func reduce(
 
 		trialsResult, candidateErr := engine.RunTrials(ctx, client, candidateScenario, trials)
 		candidateResult := CandidateResult{
-			Candidate: candidate,
-			Summary:   summarize(trialsResult),
-			Err:       candidateErr,
+			Candidate:              candidate,
+			Summary:                summarize(trialsResult),
+			Err:                    candidateErr,
+			OutcomeRequirementsMet: outcomesSatisfied(trialsResult),
 		}
 		if candidateErr != nil {
 			candidateResult.Trials = &trialsResult
@@ -142,7 +144,7 @@ func reduce(
 				candidateErr,
 			)
 		}
-		if qualifies(candidateResult.Summary) {
+		if qualifies(candidateResult.Summary) && candidateResult.OutcomeRequirementsMet {
 			candidateResult.Accepted = true
 			candidateResult.Trials = &trialsResult
 			result.Candidates = append(result.Candidates, candidateResult)
@@ -197,7 +199,7 @@ func validateInput(scenario engine.Scenario, trials int) error {
 
 func smallerCandidates(scenario engine.Scenario, limit int) ([]Candidate, bool) {
 	candidates := make([]Candidate, 0, min(limit, MaxCandidates))
-	for attempts := 2; attempts <= scenario.Attempts; attempts++ {
+	for attempts := max(2, scenario.Outcomes.MinimumAccepted()); attempts <= scenario.Attempts; attempts++ {
 		maximumConcurrency := min(attempts, scenario.Concurrency)
 		for concurrency := 2; concurrency <= maximumConcurrency; concurrency++ {
 			if attempts == scenario.Attempts && concurrency == scenario.Concurrency {
@@ -242,4 +244,18 @@ func qualifies(summary TrialSummary) bool {
 		summary.Inconclusive == 0 &&
 		summary.Errored == 0 &&
 		summary.Violated > summary.Requested/2
+}
+
+// A demonstrated violation remains a failing result even when operation
+// coverage is uncertain. Such evidence must not qualify a reduction candidate.
+func outcomesSatisfied(result engine.TrialsResult) bool {
+	if len(result.Trials) == 0 || len(result.Trials) != result.Requested {
+		return false
+	}
+	for _, trial := range result.Trials {
+		if trial.Run.Outcomes == nil || !trial.Run.Outcomes.Trustworthy() {
+			return false
+		}
+	}
+	return true
 }

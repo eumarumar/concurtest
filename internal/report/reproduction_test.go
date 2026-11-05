@@ -42,7 +42,7 @@ func TestReportsReproduceEffectiveExecution(t *testing.T) {
 					Selected: reduction.Candidate{Attempts: 2, Concurrency: 2}, SelectedTrials: &selected,
 					Candidates: []reduction.CandidateResult{{
 						Candidate: reduction.Candidate{Attempts: 2, Concurrency: 2},
-						Accepted:  true, Trials: &selected,
+						Accepted:  true, OutcomeRequirementsMet: true, Trials: &selected,
 					}},
 				}
 			}
