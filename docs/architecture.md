@@ -197,14 +197,27 @@ traffic. It first requires the configured baseline to demonstrate violations in
 a strict majority of at least three clean trials. Errored or inconclusive
 trials prevent reduction from starting.
 
+The invariant definition stays fixed while attempts and concurrency vary.
+The baseline must have a strict majority violating in one direction, below or
+above its constraint. Each candidate needs a strict majority matching that
+direction, in addition to usable outcomes in every trial. Equality compares
+the observed integer with the required value; change compares the evaluated
+delta with the required change. Bounds distinguish below-minimum from
+above-maximum; successful-attempt limits fail only above their maximum.
+A split baseline skips reduction without hiding its demonstrated violations.
+Matching the same predicate and direction does not establish the same cause or
+detect external drift that preserves the direction. There is no user-defined
+failure identity or automatic baseline revalidation.
+
 Candidates vary only attempt count and concurrency. They run sequentially in a
 stable attempts-first order, use the baseline trial count, and run all setup
 steps before every trial through the existing complete scenario runner. Candidate
 concurrency starts at two so reduction remains focused on concurrent failures.
 
 The search stops at the first qualifying candidate or after 100 candidates.
-Rejected candidates retain bounded status summaries; the baseline, selected
-candidate, and any interrupted active candidate retain complete evidence.
+Rejected candidates retain bounded status summaries and matching-violation counts;
+the baseline, selected candidate, and any interrupted active candidate retain
+complete evidence.
 Reports call the result the smallest observed failure and do not claim
 mathematical minimality or statistical confidence.
 
@@ -253,7 +266,8 @@ state. Non-violating trials with insufficient coverage become inconclusive;
 demonstrated violations retain precedence. State observation still runs after
 unexpected responses. Reduction additionally requires usable outcomes in every
 baseline and candidate trial, and preserves that decision in candidate summaries.
-Matching failure identity remains a separate concern.
+The unchanged invariant and its majority failure direction also gate reduction;
+matching causal failure identity remains outside this evidence.
 
 ### Observation
 

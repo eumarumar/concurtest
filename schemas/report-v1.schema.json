@@ -508,9 +508,10 @@
     "candidate_reduction": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["number", "attempts", "concurrency", "accepted", "summary", "error", "trials", "outcome_requirements_met"],
+      "required": ["number", "attempts", "concurrency", "accepted", "summary", "error", "trials", "outcome_requirements_met", "matching_violations"],
       "properties": {
         "outcome_requirements_met": { "type": "boolean" },
+        "matching_violations": { "type": "integer", "minimum": 0, "maximum": 100 },
         "number": { "type": "integer", "minimum": 1, "maximum": 100 },
         "attempts": { "type": "integer", "minimum": 1 },
         "concurrency": { "type": "integer", "minimum": 1 },
@@ -561,9 +562,10 @@
     "reduction": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "timing", "max_candidates", "baseline", "candidates", "selection"],
+      "required": ["status", "timing", "max_candidates", "baseline", "candidates", "selection", "failure_direction"],
       "properties": {
         "status": { "enum": ["skipped", "reduced", "unchanged", "limited", "stopped", "interrupted", "errored"] },
+        "failure_direction": { "enum": ["below", "above", null] },
         "timing": { "$ref": "#/$defs/nullable_timing" },
         "max_candidates": { "type": "integer", "minimum": 1 },
         "baseline": { "$ref": "#/$defs/baseline_reduction" },

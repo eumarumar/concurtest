@@ -207,6 +207,7 @@ type candidateReductionJSON struct {
 	Concurrency            int                  `json:"concurrency"`
 	Accepted               bool                 `json:"accepted"`
 	OutcomeRequirementsMet bool                 `json:"outcome_requirements_met"`
+	MatchingViolations     int                  `json:"matching_violations"`
 	Summary                candidateSummaryJSON `json:"summary"`
 	Error                  *errorJSON           `json:"error"`
 	Trials                 []trialJSON          `json:"trials"`
@@ -230,12 +231,13 @@ type selectionJSON struct {
 }
 
 type reductionJSON struct {
-	Status        string                   `json:"status"`
-	Timing        *timingJSON              `json:"timing"`
-	MaxCandidates int                      `json:"max_candidates"`
-	Baseline      baselineReductionJSON    `json:"baseline"`
-	Candidates    []candidateReductionJSON `json:"candidates"`
-	Selection     *selectionJSON           `json:"selection"`
+	Status           string                      `json:"status"`
+	FailureDirection *reduction.FailureDirection `json:"failure_direction"`
+	Timing           *timingJSON                 `json:"timing"`
+	MaxCandidates    int                         `json:"max_candidates"`
+	Baseline         baselineReductionJSON       `json:"baseline"`
+	Candidates       []candidateReductionJSON    `json:"candidates"`
+	Selection        *selectionJSON              `json:"selection"`
 }
 
 type reproductionJSON struct {
@@ -620,15 +622,21 @@ func reductionResultJSON(input Input) *reductionJSON {
 			Concurrency:            candidate.Candidate.Concurrency,
 			Accepted:               candidate.Accepted,
 			OutcomeRequirementsMet: candidate.OutcomeRequirementsMet,
+			MatchingViolations:     candidate.MatchingViolations,
 			Summary:                reductionSummaryJSON(candidate.Summary),
 			Error:                  optionalError(candidate.Err),
 			Trials:                 retained,
 		}
 	}
+	var direction *reduction.FailureDirection
+	if result.FailureDirection != "" {
+		direction = new(result.FailureDirection)
+	}
 	return &reductionJSON{
-		Status:        status,
-		Timing:        timing(result.StartedAt, result.CompletedAt),
-		MaxCandidates: reduction.MaxCandidates,
+		Status:           status,
+		FailureDirection: direction,
+		Timing:           timing(result.StartedAt, result.CompletedAt),
+		MaxCandidates:    reduction.MaxCandidates,
 		Baseline: baselineReductionJSON{
 			Attempts:    input.Scenario.Attempts,
 			Concurrency: input.Scenario.Concurrency,

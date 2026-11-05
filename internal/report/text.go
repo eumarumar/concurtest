@@ -341,6 +341,9 @@ func writeReduction(writer io.Writer, style textStyle, scenario engine.Scenario,
 	status := reductionStatusLabel(result.Status, runErr)
 	fmt.Fprintf(writer, "\n%s\n", style.heading("Reduction"))
 	fmt.Fprintf(writer, "  Status          %s\n", style.status(status))
+	if result.FailureDirection != "" {
+		fmt.Fprintf(writer, "  Direction       %s the required value or bound\n", result.FailureDirection)
+	}
 
 	if options.Verbose {
 		fmt.Fprintf(writer, "  Candidates      %d evaluated\n", len(result.Candidates))
@@ -374,6 +377,8 @@ func writeReduction(writer io.Writer, style textStyle, scenario engine.Scenario,
 			fmt.Fprintln(writer, "  Finding         Baseline operation outcomes did not meet the declared requirements; reduction needs usable outcomes.")
 		} else if baseline.Inconclusive > 0 || baseline.Errored > 0 {
 			fmt.Fprintf(writer, "  Finding         Baseline had %d inconclusive and %d errored trials; reduction needs clean results.\n", baseline.Inconclusive, baseline.Errored)
+		} else if baseline.Violated > baseline.Requested/2 && result.FailureDirection == "" {
+			fmt.Fprintln(writer, "  Finding         No single failure direction had a strict majority of baseline trials.")
 		} else {
 			fmt.Fprintf(writer, "  Finding         Baseline had %d violations in %d trials; a strict majority is required.\n", baseline.Violated, baseline.Requested)
 		}
@@ -382,6 +387,15 @@ func writeReduction(writer io.Writer, style textStyle, scenario engine.Scenario,
 		fmt.Fprintf(writer, "  Attempts        %d\n", result.Selected.Attempts)
 		fmt.Fprintf(writer, "  Concurrency     %d\n", result.Selected.Concurrency)
 		fmt.Fprintf(writer, "  Violations      %d/%d trials\n", selected.Violated, selected.Requested)
+		if result.FailureDirection != "" {
+			matching := 0
+			for _, trial := range result.SelectedTrials.Trials {
+				if result.MatchesFailure(trial) {
+					matching++
+				}
+			}
+			fmt.Fprintf(writer, "  Matching        %d/%d trials in the baseline direction\n", matching, selected.Requested)
+		}
 		if result.Status == reduction.StatusUnchanged {
 			fmt.Fprintln(writer, "  Finding         No smaller tested configuration met the reproduction rule.")
 		}
@@ -389,6 +403,7 @@ func writeReduction(writer io.Writer, style textStyle, scenario engine.Scenario,
 			fmt.Fprintf(writer, "  Finding         The %d-candidate limit was reached; smaller untested configurations may remain.\n", reduction.MaxCandidates)
 		}
 		fmt.Fprintln(writer, "  Note            Smallest observed failure; a smaller one may still exist.")
+		fmt.Fprintln(writer, "  Limit           Matching the same invariant and direction does not prove the same root cause.")
 
 		if options.Verbose && result.Status == reduction.StatusReduced {
 			writeTrialCollection(writer, style, scenario, *result.SelectedTrials, "Selected candidate")
@@ -421,6 +436,7 @@ func writeCandidateResult(writer io.Writer, candidate reduction.CandidateResult)
 		candidate.Candidate.Attempts, candidate.Candidate.Concurrency,
 		candidate.Summary.Passed, candidate.Summary.Violated, candidate.Summary.Inconclusive, candidate.Summary.Errored,
 		candidate.Summary.Completed, candidate.Summary.Requested, displayDuration(candidate.Summary.Duration()))
+	fmt.Fprintf(writer, " · %d matching violations", candidate.MatchingViolations)
 	if candidate.Accepted {
 		fmt.Fprint(writer, " · selected")
 	}
@@ -486,8 +502,11 @@ func writeCompactEvidence(writer io.Writer, style textStyle, input Input) {
 
 func compactViolation(input Input) (engine.TrialResult, string, bool) {
 	if input.Reduction != nil && input.Reduction.SelectedTrials != nil {
-		if trial, ok := firstTrialWithStatus(input.Reduction.SelectedTrials.Trials, engine.TrialStatusViolated); ok {
-			return trial, "Smallest observed failure", true
+		for _, trial := range input.Reduction.SelectedTrials.Trials {
+			if input.Reduction.MatchesFailure(trial) ||
+				(input.Reduction.FailureDirection == "" && trial.Status == engine.TrialStatusViolated) {
+				return trial, "Smallest observed failure", true
+			}
 		}
 	}
 	if trial, ok := firstTrialWithStatus(input.Result.Trials, engine.TrialStatusViolated); ok {

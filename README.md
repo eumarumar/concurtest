@@ -222,8 +222,11 @@ it does not remove side effects from previous trials. See
 
 Set `execution.reduce: true` to search smaller attempt and concurrency settings.
 Reduction requires setup and at least three trials. It runs after a majority
-of trials violate the invariant, with no errored or inconclusive trials.
-The result is the smallest observed failure; smaller failures may still exist.
+of trials violate the unchanged invariant in one direction, with no errored or
+inconclusive trials and usable operation outcomes in every trial. Smaller
+candidates must reproduce that direction in a majority of trials. Matching the
+predicate and direction does not prove the same root cause. The result is the
+smallest observed failure; smaller failures may still exist.
 
 Reports include a reproduction command, for example:
 

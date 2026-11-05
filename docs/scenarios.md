@@ -434,8 +434,27 @@ none are errored or inconclusive, and every trial meets its operation outcome
 requirements. Candidates must meet the same requirements. Candidates with fewer
 attempts than the minimum accepted-response requirement are not tested. Rejected
 candidate summaries retain `outcome_requirements_met`, even when their full
-trial evidence is not retained. This does not yet preserve the original failure's
-identity or direction.
+trial evidence is not retained.
+
+The invariant definition stays fixed throughout the search. A strict majority
+of baseline trials must fail in the same direction: below or above the required
+value or bound. Each candidate must reproduce that direction in a strict majority
+of its trials. Equality distinguishes too little from too much; change compares
+the measured change with the required change, rather than comparing final state.
+Bounds distinguish below-minimum from above-maximum, and successful-response
+limits fail above their maximum. A baseline split between directions skips
+reduction while keeping the violation verdict, as does a rare violation without
+a majority. Passing trials and opposite-direction violations do not count toward
+the matching majority.
+
+JSON reports retain `failure_direction` (`below`, `above`, or `null` when no
+direction was selected) and each candidate's `matching_violations` count.
+Verbose text shows matching counts, including rejected candidates. Compact
+evidence uses a selected trial matching the chosen direction. These checks
+preserve the declared predicate and direction, not the root cause: unrelated
+failures can still share both. Setup, initial-state checks, and outcome policies
+remain essential. No automatic baseline revalidation or custom failure identity
+is provided.
 
 Unverified readiness or completion stops the whole search with status `stopped`;
 the active candidate is retained and later candidates are not run.

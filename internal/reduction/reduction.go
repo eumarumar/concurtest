@@ -64,8 +64,10 @@ type CandidateResult struct {
 	Summary                TrialSummary
 	Accepted               bool
 	OutcomeRequirementsMet bool
-	Trials                 *engine.TrialsResult
-	Err                    error
+	// MatchingViolations counts trials violating in the baseline's direction.
+	MatchingViolations int
+	Trials             *engine.TrialsResult
+	Err                error
 }
 
 // Result records the baseline, ordered candidate summaries, and any selected
@@ -78,6 +80,8 @@ type Result struct {
 	Selected       Candidate
 	SelectedTrials *engine.TrialsResult
 	Status         Status
+	// FailureDirection is empty when no clean baseline majority was selected.
+	FailureDirection FailureDirection
 }
 
 // Duration reports the elapsed reduction time, including the baseline.
@@ -87,8 +91,9 @@ func (r Result) Duration() time.Duration {
 
 // Reduce runs a baseline and then evaluates up to MaxCandidates smaller
 // attempt/concurrency pairs in deterministic order. A candidate is accepted
-// only when a strict majority of its trials violate and none are inconclusive
-// or errored.
+// only when a strict majority of its trials violate the unchanged invariant in
+// the baseline's majority direction, all outcome requirements are met, and none
+// are inconclusive or errored. This does not establish the same root cause.
 func Reduce(
 	ctx context.Context,
 	client *http.Client,
@@ -127,6 +132,11 @@ func reduce(
 		result.Status = StatusSkipped
 		return result, nil
 	}
+	result.FailureDirection = majorityDirection(baseline)
+	if result.FailureDirection == "" {
+		result.Status = StatusSkipped
+		return result, nil
+	}
 
 	candidates, limited := smallerCandidates(scenario, candidateLimit)
 	result.Candidates = make([]CandidateResult, 0, len(candidates))
@@ -141,6 +151,7 @@ func reduce(
 			Summary:                summarize(trialsResult),
 			Err:                    candidateErr,
 			OutcomeRequirementsMet: outcomesSatisfied(trialsResult),
+			MatchingViolations:     matchingViolations(trialsResult, result.FailureDirection),
 		}
 		if candidateErr != nil {
 			candidateResult.Trials = &trialsResult
@@ -160,7 +171,8 @@ func reduce(
 			result.Status = StatusStopped
 			return result, nil
 		}
-		if qualifies(candidateResult.Summary) && candidateResult.OutcomeRequirementsMet {
+		if qualifies(candidateResult.Summary) && candidateResult.OutcomeRequirementsMet &&
+			candidateResult.MatchingViolations > trials/2 {
 			candidateResult.Accepted = true
 			candidateResult.Trials = &trialsResult
 			result.Candidates = append(result.Candidates, candidateResult)
