@@ -242,12 +242,21 @@ history.
 
 Execution history should be structured data, not only formatted terminal output.
 
-History-aware invariants evaluate recorded operation outcomes directly. The
-initial history invariant limits the number of attempts whose final HTTP status
-matches an explicit list, or the default 2xx range. It retains every qualifying
-attempt ID and the stable suffix beyond the configured maximum. Missing or
-failed executions do not count as successful; they keep a non-violating trial
+History-aware invariants evaluate recorded operation responses directly. The
+initial history invariant measures matching HTTP response counts: attempts whose
+final HTTP status matches an explicit list, or the default 2xx range. It retains
+every qualifying attempt ID and the stable suffix beyond the configured maximum.
+Missing or failed executions do not count as matching; they keep a non-violating trial
 from being reported as a trustworthy pass.
+
+Each matching attempt counts separately, even if an idempotent replay returns
+the same operation ID, body, and status while creating only one stored effect.
+Reports identify this measurement explicitly; the legacy scenario fields
+`maximum_successful_attempts` and `successful_status_codes` keep their names.
+No response deduplication or inference of logical effects is performed. For
+per-key effect checks, the existing JSON integer observer can read an
+application-provided count of committed effects for the tested key. Its meaning
+depends on that observer's contract, initial-state checks, and completion boundary.
 
 Operation outcome policy is a separate check of whether the trial exercised its
 declared HTTP response contract. The default accepts the history invariant's
@@ -304,7 +313,7 @@ Invariant evaluation should be separate from transport execution.
 
 A scenario continues to declare exactly one invariant. The current concrete
 forms are a JSON integer constraint at a configured path and a maximum
-number of successful HTTP attempts. JSON integer constraints support an inclusive
+matching HTTP response count. JSON integer constraints support an inclusive
 minimum, an inclusive maximum, both bounds, exact equality, or an exact change
 from a baseline. Equality cannot be combined with bounds; change cannot be
 combined with any other constraint. A minimum must not exceed its maximum. The

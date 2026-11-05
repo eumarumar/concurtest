@@ -71,9 +71,11 @@
     "maximum_successful_attempts_definition": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "name", "maximum", "successful_status_codes"],
+      "description": "Counts matching HTTP responses, including replays; does not verify logical or stored effects.",
+      "required": ["type", "name", "maximum", "successful_status_codes", "measurement"],
       "properties": {
         "type": { "const": "maximum_successful_attempts" },
+        "measurement": { "const": "matching_http_response_count" },
         "name": { "type": "string", "minLength": 1 },
         "maximum": { "type": "integer", "minimum": 0 },
         "successful_status_codes": {
@@ -407,11 +409,14 @@
     "maximum_successful_attempts_evaluation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "successful_attempt_ids", "over_limit_attempt_ids", "violated"],
+      "description": "Every matching client attempt counts separately, even when response IDs and bodies are identical.",
+      "required": ["type", "successful_attempt_ids", "over_limit_attempt_ids", "violated", "measurement"],
       "properties": {
         "type": { "const": "maximum_successful_attempts" },
+        "measurement": { "const": "matching_http_response_count" },
         "successful_attempt_ids": {
           "type": "array",
+          "description": "Client attempt IDs whose completed responses matched the status filter; not logical operation IDs.",
           "items": { "type": "integer", "minimum": 1 }
         },
         "over_limit_attempt_ids": {

@@ -111,6 +111,7 @@ type jsonIntegerDefinitionJSON struct {
 
 type maximumSuccessfulAttemptsDefinitionJSON struct {
 	Type                  string `json:"type"`
+	Measurement           string `json:"measurement"`
 	Name                  string `json:"name"`
 	Maximum               int    `json:"maximum"`
 	SuccessfulStatusCodes []int  `json:"successful_status_codes"`
@@ -169,6 +170,7 @@ type jsonIntegerEvaluationJSON struct {
 
 type maximumSuccessfulAttemptsEvaluationJSON struct {
 	Type                 string `json:"type"`
+	Measurement          string `json:"measurement"`
 	SuccessfulAttemptIDs []int  `json:"successful_attempt_ids"`
 	OverLimitAttemptIDs  []int  `json:"over_limit_attempt_ids"`
 	Violated             bool   `json:"violated"`
@@ -454,6 +456,7 @@ func invariantDefinition(invariant engine.Invariant) any {
 	if definition := invariant.MaximumSuccessfulAttempts; definition != nil {
 		return maximumSuccessfulAttemptsDefinitionJSON{
 			Type: "maximum_successful_attempts", Name: definition.Name,
+			Measurement:           "matching_http_response_count",
 			Maximum:               definition.Maximum,
 			SuccessfulStatusCodes: append([]int(nil), definition.SuccessfulStatusCodes...),
 		}
@@ -589,6 +592,7 @@ func invariantEvaluation(evaluation *engine.InvariantEvaluation) any {
 	if concrete := evaluation.MaximumSuccessfulAttempts; concrete != nil {
 		return maximumSuccessfulAttemptsEvaluationJSON{
 			Type:                 "maximum_successful_attempts",
+			Measurement:          "matching_http_response_count",
 			SuccessfulAttemptIDs: append([]int{}, concrete.SuccessfulAttemptIDs...),
 			OverLimitAttemptIDs:  append([]int{}, concrete.OverLimitAttemptIDs...),
 			Violated:             concrete.Violated,

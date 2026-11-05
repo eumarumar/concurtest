@@ -408,8 +408,9 @@ evaluations add `baseline` and `change`.
 
 ## History-based invariants
 
-A history invariant evaluates recorded operation responses. The regression
-history scenario limits accepted purchases to one:
+A history invariant measures a **matching HTTP response count**. For a target
+whose contract uses HTTP 201 for each newly accepted purchase, a scenario can
+limit those matching responses to one:
 
 ```yaml
 invariant:
@@ -419,11 +420,77 @@ invariant:
 ```
 
 If `successful_status_codes` is omitted, every HTTP status from `200` through
-`299` counts as success. Reports identify qualifying attempt IDs and those beyond
-the configured maximum. An optional observation provides context without
-replacing the history check. Successful HTTP responses are evidence for the
-declared contract; they do not automatically establish a business outcome such
-as a paid order.
+`299` matches, including empty 204 replies. An explicit list matches those exact
+statuses, including non-2xx statuses if declared. Each completed matching attempt
+counts separately, even when its body and operation ID repeat another response.
+Reports identify matching client attempt IDs and those beyond the configured
+maximum. These IDs do not identify logical operations in the target application.
+
+The YAML fields retain their existing names. Text reports say "matching HTTP
+responses" and state that replays count separately. JSON definitions and
+evaluations add `measurement: "matching_http_response_count"`; the legacy
+`successful_attempt_ids` field contains matching client attempt IDs. No response
+bodies or operation IDs are deduplicated to infer effects. An optional observation
+provides context without replacing or reconciling the response-count check.
+
+If an API returns 201 for the first effect and 204 for replay, a `[201]` filter
+can distinguish those replies under that declared contract. Configure
+`outcomes.accepted_status_codes: [201, 204]` separately when both are expected
+accepted responses; otherwise outcome validation inherits the narrower filter.
+If replay repeats the original 201 response, this filter still counts both.
+
+### Idempotent replay control
+
+A correct idempotent operation can return the same successful status and body
+twice while storing one effect. A response limit of one then fails its declared
+HTTP property; that result does not demonstrate broken idempotency. The passing
+control for an effect-count claim observes the stored effects for the same key.
+The existing JSON integer rule can verify this without a new invariant type:
+
+```yaml
+version: 1
+name: One stored effect for repeated requests
+target: http://127.0.0.1:8080
+request_timeout: 2s
+setup:
+  method: POST
+  path: /reset?key=replay-control
+precondition:
+  request: {method: GET, path: '/effects?key=replay-control'}
+  assert:
+    name: No initial effects for the test key
+    json_integer_path: [effect_count]
+    equals: 0
+operation:
+  name: Repeat the same operation
+  method: POST
+  path: /operation
+  headers: {Idempotency-Key: replay-control}
+execution: {attempts: 2, concurrency: 2, trials: 3, reduce: false}
+outcomes: {accepted_status_codes: [201], minimum_accepted_attempts: 2}
+observation: {method: GET, path: '/effects?key=replay-control'}
+invariant:
+  name: Exactly one stored effect for the test key
+  json_integer_path: [effect_count]
+  equals: 1
+```
+
+These paths are an illustrative target contract; the application must provide
+the reset and an authoritative count of committed effects for this key. The
+operation repeats the same key and payload. The reset must clear both effects
+and the associated idempotency record. This synchronous control expects two 201
+responses and one effect in every trial; duplicate effects or no effect fail.
+Use the target's actual status contract and a bounded `completion` condition for
+deferred work, plus `readiness` before reset when earlier work may remain.
+
+`change: 1` can instead check a delta against a verified starting count. Both
+forms depend on an honest, complete observer: a deduplicated view, compensating
+deletions, unrelated writes, or later effects can hide violations. A repeated
+response ID is only response evidence and can accompany two actual writes.
+Claims about duplicate orders or payments require reconciliation with the
+application's authoritative stored effects. A scalar count checks this one
+property, not every business rule; custom logical-ID comparison and automatic
+response/state reconciliation are not provided.
 
 ## Failure reduction
 

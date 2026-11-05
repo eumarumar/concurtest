@@ -129,14 +129,18 @@ Checkout B writes stock: 99
 
 The stock invariant (`change: -1`) passes because stock decreased by one. The
 history invariant (`maximum_successful_attempts: 1`) fails because two checkout
-requests succeeded. A passing invariant means the specific property held in the
+responses matched its status filter. This does not establish two stored orders:
+idempotent replays can repeat successful statuses and response IDs. Claims about
+duplicate orders require observation of the application's stored effects.
+A passing invariant means the specific property held in the
 tested executions; other business rules may still have been violated.
 
 A previously captured local history run produced the following excerpt. It
 shows the baseline invariant evidence and reduced settings from that run;
 omitted sections and formatting reflect the earlier capture. It is not a
 fresh verification of these credential-free templates, and the stock scenario
-has no guaranteed outcome.
+has no guaranteed outcome. Current reports label this measure "matching HTTP
+responses"; the excerpt preserves the wording of the earlier capture.
 
 ```text
 ConcurTest · juice shop duplicate checkout

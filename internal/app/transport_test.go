@@ -124,7 +124,7 @@ invariant:
 					if test.redirect {
 						want = "302"
 						if format == "text" && test.path == "/purchase" {
-							want = "Observed        0 successful attempts"
+							want = "Observed        0 matching HTTP responses"
 						}
 					}
 					if !strings.Contains(stdout.String(), want) {

@@ -20,7 +20,7 @@ func TestNodeInventoryEndToEnd(t *testing.T) {
 		evidence string
 	}{
 		{"observation-scenario.yaml", "Observed        $[\"stock\"] = -1"},
-		{"history-scenario.yaml", "Observed        2 successful attempts"},
+		{"history-scenario.yaml", "Observed        2 matching HTTP responses"},
 	} {
 		t.Run(test.scenario, func(t *testing.T) {
 			t.Parallel()

@@ -43,17 +43,20 @@ type JSONIntegerEvaluation struct {
 	Violated bool
 }
 
-// MaximumSuccessfulAttemptsInvariant limits operation responses whose HTTP
-// status qualifies as successful. A nil SuccessfulStatusCodes slice means any
-// 2xx response; an explicit list matches only those exact status codes.
+// MaximumSuccessfulAttemptsInvariant limits matching HTTP response counts.
+// A nil SuccessfulStatusCodes slice matches any 2xx response; an explicit list
+// matches only those exact status codes, including non-2xx if configured. Each
+// matching attempt counts separately, including idempotent replays with the same
+// response ID or body. This does not count or verify logical business effects.
 type MaximumSuccessfulAttemptsInvariant struct {
 	Name                  string
 	Maximum               int
 	SuccessfulStatusCodes []int
 }
 
-// MaximumSuccessfulAttemptsEvaluation records the stable IDs of every
-// qualifying attempt and the suffix beyond the configured maximum.
+// MaximumSuccessfulAttemptsEvaluation records the stable attempt IDs of every
+// matching HTTP response and the suffix beyond the configured maximum. These
+// IDs identify client attempts, not application operation IDs or stored effects.
 type MaximumSuccessfulAttemptsEvaluation struct {
 	Invariant            MaximumSuccessfulAttemptsInvariant
 	SuccessfulAttemptIDs []int

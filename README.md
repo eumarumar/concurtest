@@ -175,11 +175,14 @@ Each scenario declares one invariant:
 | Inclusive integer bounds | `json_integer_path` with `minimum`, `maximum`, or both |
 | Exact integer value | `json_integer_path` with `equals` |
 | Change from the trial's baseline | `json_integer_path` with `change` |
-| Maximum successful operation responses | `maximum_successful_attempts`, optional `successful_status_codes` |
+| Maximum matching HTTP response count | `maximum_successful_attempts`, optional `successful_status_codes` |
 
 Integer checks require an observation request. History checks count qualifying
-HTTP responses; success defaults to any 2xx status. See the
-[scenario reference](docs/scenarios.md) for syntax and evaluation rules.
+HTTP responses; matching defaults to any 2xx status. Replayed responses count
+separately, even when they represent one stored effect. The
+[replay control](docs/scenarios.md#idempotent-replay-control) uses an observation
+of the per-key count to check stored effects. The [scenario reference](docs/scenarios.md)
+covers syntax and evaluation rules.
 
 A clean pass also requires usable operation responses in each trial. The default
 requires at least one accepted response and no unexpected or unknown outcomes.
@@ -268,8 +271,9 @@ Report format does not change exit codes. The
 - Setup controls trial state; automatic rollback and resource isolation are not provided.
 - Redirects are not followed. Observed automatic HTTP retries prevent a clean
   pass, but can still cause duplicate effects. See [HTTP transport behavior](docs/scenarios.md#http-requests-retries-and-redirects).
-- Net stock changes can hide duplicate effects, and successful HTTP responses
-  alone do not prove business outcomes.
+- Net stock changes can hide duplicate effects, and matching HTTP response counts
+  do not establish logical effect counts. Idempotent replays may repeat the same
+  successful response; matching response IDs alone cannot verify stored effects.
 
 Licensed under [Apache 2.0](LICENSE). For contributions, read the
 [architecture](docs/architecture.md), keep changes focused, and run:

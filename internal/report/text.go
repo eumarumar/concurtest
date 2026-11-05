@@ -550,7 +550,7 @@ func writeCompactViolation(writer io.Writer, scenario engine.Scenario, trial eng
 	attempts := trial.Run.History.Attempts
 	description := "attempt"
 	if scenario.Invariant.MaximumSuccessfulAttempts != nil && trial.Run.Evaluation != nil && trial.Run.Evaluation.MaximumSuccessfulAttempts != nil {
-		description = "successful attempt"
+		description = "matching attempt"
 		successful := make(map[int]struct{}, len(trial.Run.Evaluation.MaximumSuccessfulAttempts.SuccessfulAttemptIDs))
 		for _, id := range trial.Run.Evaluation.MaximumSuccessfulAttempts.SuccessfulAttemptIDs {
 			successful[id] = struct{}{}
@@ -870,15 +870,16 @@ func writeInvariantLines(writer io.Writer, invariant engine.Invariant, evaluatio
 	case invariant.MaximumSuccessfulAttempts != nil:
 		definition := invariant.MaximumSuccessfulAttempts
 		fmt.Fprintf(writer, "%s%s\n", indent, definition.Name)
-		fmt.Fprintf(writer, "%sExpected        At most %d successful %s\n", indent, definition.Maximum, attemptWord(definition.Maximum))
-		fmt.Fprintf(writer, "%sSuccess statuses %s\n", indent, successfulStatuses(definition.SuccessfulStatusCodes))
+		fmt.Fprintf(writer, "%sExpected        At most %d matching HTTP %s\n", indent, definition.Maximum, pluralize("response", definition.Maximum))
+		fmt.Fprintf(writer, "%sMatch statuses  %s\n", indent, successfulStatuses(definition.SuccessfulStatusCodes))
+		fmt.Fprintf(writer, "%sScope           Counts responses, including replays; verify stored effects separately.\n", indent)
 		if evaluation == nil || evaluation.MaximumSuccessfulAttempts == nil {
 			fmt.Fprintf(writer, "%sObserved        Not evaluated\n", indent)
 			return
 		}
 		historyEvaluation := evaluation.MaximumSuccessfulAttempts
-		fmt.Fprintf(writer, "%sObserved        %d successful %s\n", indent, len(historyEvaluation.SuccessfulAttemptIDs), attemptWord(len(historyEvaluation.SuccessfulAttemptIDs)))
-		fmt.Fprintf(writer, "%sSuccessful       %s\n", indent, attemptIDs(historyEvaluation.SuccessfulAttemptIDs))
+		fmt.Fprintf(writer, "%sObserved        %d matching HTTP %s\n", indent, len(historyEvaluation.SuccessfulAttemptIDs), pluralize("response", len(historyEvaluation.SuccessfulAttemptIDs)))
+		fmt.Fprintf(writer, "%sMatching        %s\n", indent, attemptIDs(historyEvaluation.SuccessfulAttemptIDs))
 		fmt.Fprintf(writer, "%sBeyond maximum   %s\n", indent, attemptIDs(historyEvaluation.OverLimitAttemptIDs))
 	}
 }
@@ -934,13 +935,6 @@ func attemptIDs(ids []int) string {
 		formatted[index] = fmt.Sprintf("#%d", id)
 	}
 	return strings.Join(formatted, ", ")
-}
-
-func attemptWord(count int) string {
-	if count == 1 {
-		return "attempt"
-	}
-	return "attempts"
 }
 
 func writeOptionalExecution(writer io.Writer, label string, execution *engine.HTTPExecution) {
