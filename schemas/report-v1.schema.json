@@ -128,11 +128,78 @@
         { "type": "null" }
       ]
     },
+    "assertion_definition": {
+      "oneOf": [
+        { "allOf": [{ "$ref": "#/$defs/json_integer_definition" }, { "not": { "required": ["change"] } }] },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "name", "path", "equals"],
+          "properties": {
+            "type": { "const": "json_boolean" },
+            "name": { "type": "string", "minLength": 1 },
+            "path": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+            "equals": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "nullable_assertion_definition": {
+      "oneOf": [{ "$ref": "#/$defs/assertion_definition" }, { "type": "null" }]
+    },
+    "assertion_evaluation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "observed", "satisfied"],
+          "properties": {
+            "type": { "enum": ["json_integer", "json_boolean"] },
+            "observed": {},
+            "satisfied": { "type": "boolean" }
+          },
+          "allOf": [
+            { "if": { "properties": { "type": { "const": "json_integer" } } }, "then": { "properties": { "observed": { "type": ["integer", "null"] } } }, "else": { "properties": { "observed": { "type": ["boolean", "null"] } } } },
+            { "if": { "properties": { "satisfied": { "const": true } } }, "then": { "properties": { "observed": { "not": { "type": "null" } } } } }
+          ]
+        },
+        { "type": "null" }
+      ]
+    },
+    "precondition_definition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["request", "assertion"],
+          "properties": {
+            "request": { "$ref": "#/$defs/request" },
+            "assertion": { "$ref": "#/$defs/assertion_definition" }
+          }
+        },
+        { "type": "null" }
+      ]
+    },
+    "precondition_execution": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["execution", "assertion"],
+          "properties": {
+            "execution": { "$ref": "#/$defs/execution" },
+            "assertion": { "$ref": "#/$defs/assertion_evaluation" }
+          }
+        },
+        { "type": "null" }
+      ]
+    },
     "scenario": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "name", "target", "request_timeout_ns", "execution", "setup", "operation", "observation", "invariant", "outcomes"],
+      "required": ["path", "name", "target", "request_timeout_ns", "execution", "setup", "precondition", "operation", "observation", "invariant", "outcomes"],
       "properties": {
+        "precondition": { "$ref": "#/$defs/precondition_definition" },
         "outcomes": { "$ref": "#/$defs/outcome_policy" },
         "path": { "type": "string", "minLength": 1 },
         "name": { "type": "string" },
@@ -155,8 +222,9 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["name", "request"],
+            "required": ["name", "request", "assertion"],
             "properties": {
+              "assertion": { "$ref": "#/$defs/nullable_assertion_definition" },
               "name": { "type": "string" },
               "request": { "$ref": "#/$defs/request" }
             }
@@ -330,8 +398,9 @@
         "evidence": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["outcome", "timing", "setup", "history", "baseline_observation", "observation", "invariant_evaluation", "outcome_evaluation"],
+          "required": ["outcome", "timing", "setup", "precondition", "history", "baseline_observation", "observation", "invariant_evaluation", "outcome_evaluation"],
           "properties": {
+            "precondition": { "$ref": "#/$defs/precondition_execution" },
             "outcome_evaluation": { "$ref": "#/$defs/outcome_evaluation" },
             "outcome": { "type": ["string", "null"], "enum": ["passed", "violated", "inconclusive", null] },
             "timing": { "$ref": "#/$defs/nullable_timing" },
@@ -341,8 +410,9 @@
               "items": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["name", "execution"],
+                "required": ["name", "execution", "assertion"],
                 "properties": {
+                  "assertion": { "$ref": "#/$defs/assertion_evaluation" },
                   "name": { "type": "string" },
                   "execution": { "$ref": "#/$defs/execution" }
                 }

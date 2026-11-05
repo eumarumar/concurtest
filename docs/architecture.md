@@ -126,6 +126,30 @@ trial and retains the attempted prefix, including the failure. Cancellation
 stops further steps and trials. Later ordinary trials restart the full setup
 sequence; no rollback or cleanup is implied.
 
+Named setup steps may declare one optional response assertion. A separate optional
+precondition request checks initial state after all setup and before a change
+baseline or operation workers. Both use a named Boolean equality or the existing
+absolute integer bounds/equality semantics. Setup and precondition assertions
+are validated before traffic. They are separate from the one post-operation
+invariant and do not add a general expression language or multiple invariants.
+
+All preparation work belongs to the run goroutine. It completes each exchange,
+closes the body, and evaluates its check before starting another stage. No new
+goroutine, channel, retry, polling, or timeout mechanism is added. Existing request
+contexts and client timeouts apply to precondition requests. Exact JSON path
+traversal is shared with integer invariants through RawMessage, avoiding float64
+coercion. Assertion definitions are cloned into evaluation evidence; unknown
+scalar values have nil pointers, distinct from false and zero.
+
+A mismatched or unreadable declared assertion returns `precondition_failed` and
+makes the trial errored before any operation can run. Request failures preserve
+their causes and context identity. The attempted setup prefix and precondition
+exchange remain available, with observed values or an unverified assertion.
+Subsequent ordinary trials and reduction candidates run all checks again through
+the existing scenario runner. A failed check cannot qualify as a demonstrated
+post-operation violation or an eligible reduction candidate. Checks remain opt-in;
+they do not establish complete isolation or application quiescence.
+
 Each trial retains its complete structured run evidence and is classified as
 passed, violated, inconclusive, or errored. Ordinary trial errors are recorded
 and later trials still run. Parent-context cancellation preserves the active
@@ -387,8 +411,11 @@ inside reduction output; rejected candidates retain summaries, while selected
 or interrupted candidates may retain their complete ordered trials.
 
 Setup definitions and execution evidence use ordered JSON arrays. Definitions
-contain each step's name and safe request metadata; trial evidence contains only
-attempted steps, each with its name and HTTP execution. Empty arrays represent
+contain each step's name, safe request metadata, and nullable assertion definition;
+trial evidence contains only attempted steps, each with its name, HTTP execution,
+and nullable assertion evaluation. The optional precondition has separate definition
+and execution fields, with its check result retained alongside its HTTP exchange.
+Empty arrays represent
 no configured or attempted steps. The legacy single-request YAML form normalizes
 to a step with an empty name. Compact text identifies a failed step by position
 and name; verbose text also shows successful steps and marks unattempted steps.

@@ -120,42 +120,49 @@ func evaluateJSONInteger(invariant JSONIntegerInvariant, document []byte, baseli
 // readJSONInteger preserves exact values and is shared by baseline capture and
 // final evaluation. A malformed baseline must stop the run before operations.
 func readJSONInteger(segments []string, document []byte) (int64, error) {
-	decoder := json.NewDecoder(bytes.NewReader(document))
-	var rawValue json.RawMessage
-	if err := decoder.Decode(&rawValue); err != nil {
-		return 0, fmt.Errorf("decode observation as JSON: %w", err)
+	rawValue, err := readJSONAtPath(segments, document)
+	if err != nil {
+		return 0, err
 	}
-
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return 0, errors.New("decode observation as JSON: multiple JSON values")
-		}
-		return 0, fmt.Errorf("decode trailing observation data: %w", err)
-	}
-
 	path := formatJSONPath(segments)
-	for index, segment := range segments {
-		var err error
-		rawValue, err = jsonPathChild(rawValue, segment, formatJSONPath(segments[:index]))
-		if err != nil {
-			return 0, err
-		}
-	}
-
 	var observed *int64
 	if err := json.Unmarshal(rawValue, &observed); err != nil {
 		return 0, fmt.Errorf(
-			"observation path %s must contain a JSON integer representable as int64: %w",
-			path,
-			err,
+			"observation path %s must contain a JSON integer representable as int64: %w", path, err,
 		)
 	}
 	if observed == nil {
 		return 0, fmt.Errorf("observation path %s must contain an integer, not null", path)
 	}
-
 	return *observed, nil
+}
+
+// readJSONAtPath shares document validation and exact traversal between integer
+// invariants and preparation assertions without decoding numbers as float64.
+func readJSONAtPath(segments []string, document []byte) (json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(document))
+	var rawValue json.RawMessage
+	if err := decoder.Decode(&rawValue); err != nil {
+		return nil, fmt.Errorf("decode observation as JSON: %w", err)
+	}
+
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, errors.New("decode observation as JSON: multiple JSON values")
+		}
+		return nil, fmt.Errorf("decode trailing observation data: %w", err)
+	}
+
+	for index, segment := range segments {
+		var err error
+		rawValue, err = jsonPathChild(rawValue, segment, formatJSONPath(segments[:index]))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return rawValue, nil
 }
 
 // jsonPathChild interprets each segment using the observed container type.

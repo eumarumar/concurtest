@@ -483,6 +483,19 @@ func firstTrialWithStatus(trials []engine.TrialResult, status engine.TrialStatus
 
 func writeCompactViolation(writer io.Writer, scenario engine.Scenario, trial engine.TrialResult) {
 	writeOutcomeEvidence(writer, trial.Run.Outcomes, "    ")
+	checkedSetup := 0
+	for _, step := range trial.Run.Setup {
+		if step.Assertion != nil && step.Assertion.Satisfied {
+			checkedSetup++
+		}
+	}
+	if checkedSetup > 0 {
+		fmt.Fprintf(writer, "    Preparation     %d setup response checks passed\n", checkedSetup)
+	}
+	if precondition := trial.Run.Precondition; precondition != nil {
+		writeCompactStage(writer, "Precondition", &precondition.Execution)
+		writeAssertionEvidence(writer, nil, precondition.Assertion, "      ")
+	}
 	if trial.Run.BaselineObservation != nil {
 		fmt.Fprintln(writer, "    Baseline observation")
 		execution := trial.Run.BaselineObservation
@@ -596,9 +609,15 @@ func writeCompactProblem(writer io.Writer, style textStyle, sources []compactTri
 
 func writeCompactProblemExecutions(writer io.Writer, trial engine.TrialResult) {
 	for index, step := range trial.Run.Setup {
-		if stageExecutionProblem(&step.Execution) {
+		if stageExecutionProblem(&step.Execution) || (step.Assertion != nil && !step.Assertion.Satisfied) {
 			writeCompactStage(writer, setupLabel(index, step.Name), &step.Execution)
+			writeAssertionEvidence(writer, nil, step.Assertion, "      ")
 		}
+	}
+	if precondition := trial.Run.Precondition; precondition != nil &&
+		(stageExecutionProblem(&precondition.Execution) || precondition.Assertion == nil || !precondition.Assertion.Satisfied) {
+		writeCompactStage(writer, "Precondition", &precondition.Execution)
+		writeAssertionEvidence(writer, nil, precondition.Assertion, "      ")
 	}
 
 	problemAttempts := make([]engine.Attempt, 0)
@@ -697,6 +716,16 @@ func writeTrialEvidence(writer io.Writer, style textStyle, scenario engine.Scena
 			continue
 		}
 		writeOptionalExecution(writer, label, &trial.Run.Setup[index].Execution)
+		writeAssertionEvidence(writer, step.Assertion, trial.Run.Setup[index].Assertion, "    ")
+	}
+	if scenario.Precondition != nil {
+		fmt.Fprintln(writer, "\n  Precondition")
+		if trial.Run.Precondition == nil {
+			fmt.Fprintln(writer, "    Not reached.")
+		} else {
+			writeExecution(writer, &trial.Run.Precondition.Execution, "    ")
+			writeAssertionEvidence(writer, &scenario.Precondition.Assertion, trial.Run.Precondition.Assertion, "    ")
+		}
 	}
 	if scenario.Invariant.JSONInteger != nil && scenario.Invariant.JSONInteger.Change != nil {
 		fmt.Fprintln(writer, "\n  Baseline observation")

@@ -75,16 +75,17 @@ func Decode(reader io.Reader) (definition Definition, decodeErr error) {
 }
 
 type documentConfig struct {
-	Version        strictInt       `yaml:"version"`
-	Name           strictString    `yaml:"name"`
-	Target         strictString    `yaml:"target"`
-	RequestTimeout strictString    `yaml:"request_timeout"`
-	Setup          setupConfig     `yaml:"setup"`
-	Operation      operationConfig `yaml:"operation"`
-	Execution      executionConfig `yaml:"execution"`
-	Observation    *requestConfig  `yaml:"observation"`
-	Invariant      invariantConfig `yaml:"invariant"`
-	Outcomes       outcomeConfig   `yaml:"outcomes"`
+	Version        strictInt           `yaml:"version"`
+	Name           strictString        `yaml:"name"`
+	Target         strictString        `yaml:"target"`
+	RequestTimeout strictString        `yaml:"request_timeout"`
+	Setup          setupConfig         `yaml:"setup"`
+	Precondition   *preconditionConfig `yaml:"precondition"`
+	Operation      operationConfig     `yaml:"operation"`
+	Execution      executionConfig     `yaml:"execution"`
+	Observation    *requestConfig      `yaml:"observation"`
+	Invariant      invariantConfig     `yaml:"invariant"`
+	Outcomes       outcomeConfig       `yaml:"outcomes"`
 }
 
 type requestConfig struct {
@@ -95,8 +96,9 @@ type requestConfig struct {
 }
 
 type setupStepConfig struct {
-	Name    strictString   `yaml:"name"`
-	Request *requestConfig `yaml:"request"`
+	Name      strictString     `yaml:"name"`
+	Request   *requestConfig   `yaml:"request"`
+	Assertion *assertionConfig `yaml:"assert"`
 }
 
 // Both YAML forms become one ordered list. node.Decode does not inherit the
@@ -121,7 +123,7 @@ func (setup *setupConfig) UnmarshalYAML(node *yaml.Node) error {
 	steps := make(setupConfig, len(node.Content))
 	for index, item := range node.Content {
 		label := fmt.Sprintf("setup step %d", index+1)
-		if err := checkMappingFields(item, "name", "request"); err != nil {
+		if err := checkMappingFields(item, "name", "request", "assert"); err != nil {
 			return fmt.Errorf("%s: %w", label, err)
 		}
 		if err := item.Decode(&steps[index]); err != nil {
@@ -504,7 +506,30 @@ func (document documentConfig) definition() (Definition, error) {
 		if err != nil {
 			return Definition{}, err
 		}
-		setup = append(setup, engine.SetupStep{Name: string(step.Name), Request: request})
+		var assertion *engine.ResponseAssertion
+		if step.Assertion != nil {
+			definition, err := step.Assertion.assertion()
+			if err != nil {
+				return Definition{}, fmt.Errorf("setup step %d assertion: %w", index+1, err)
+			}
+			assertion = &definition
+		}
+		setup = append(setup, engine.SetupStep{Name: string(step.Name), Request: request, Assertion: assertion})
+	}
+	var precondition *engine.Precondition
+	if config := document.Precondition; config != nil {
+		if config.Request == nil || config.Assertion == nil {
+			return Definition{}, errors.New("precondition requires request and assert")
+		}
+		request, err := config.Request.httpRequest("precondition", target)
+		if err != nil {
+			return Definition{}, err
+		}
+		assertion, err := config.Assertion.assertion()
+		if err != nil {
+			return Definition{}, fmt.Errorf("precondition assertion: %w", err)
+		}
+		precondition = &engine.Precondition{Request: request, Assertion: assertion}
 	}
 
 	operationRequest, err := document.Operation.request().httpRequest("operation", target)
@@ -531,7 +556,8 @@ func (document documentConfig) definition() (Definition, error) {
 		Trials:         int(document.Execution.Trials),
 		Reduce:         bool(document.Execution.Reduce),
 		Scenario: engine.Scenario{
-			Setup: setup,
+			Setup:        setup,
+			Precondition: precondition,
 			Operation: engine.Operation{
 				Name:    operationName,
 				Request: operationRequest,

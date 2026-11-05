@@ -56,8 +56,9 @@ type operationJSON struct {
 }
 
 type setupExecutionJSON struct {
-	Name      string         `json:"name"`
-	Execution *executionJSON `json:"execution"`
+	Name      string                   `json:"name"`
+	Execution *executionJSON           `json:"execution"`
+	Assertion *assertionEvaluationJSON `json:"assertion"`
 }
 
 type executionConfigJSON struct {
@@ -68,16 +69,17 @@ type executionConfigJSON struct {
 }
 
 type scenarioJSON struct {
-	Path             string              `json:"path"`
-	Name             string              `json:"name"`
-	Target           string              `json:"target"`
-	RequestTimeoutNS int64               `json:"request_timeout_ns"`
-	Execution        executionConfigJSON `json:"execution"`
-	Setup            []operationJSON     `json:"setup"`
-	Operation        operationJSON       `json:"operation"`
-	Observation      *requestJSON        `json:"observation"`
-	Invariant        any                 `json:"invariant"`
-	Outcomes         outcomePolicyJSON   `json:"outcomes"`
+	Path             string                      `json:"path"`
+	Name             string                      `json:"name"`
+	Target           string                      `json:"target"`
+	RequestTimeoutNS int64                       `json:"request_timeout_ns"`
+	Execution        executionConfigJSON         `json:"execution"`
+	Setup            []setupDefinitionJSON       `json:"setup"`
+	Precondition     *preconditionDefinitionJSON `json:"precondition"`
+	Operation        operationJSON               `json:"operation"`
+	Observation      *requestJSON                `json:"observation"`
+	Invariant        any                         `json:"invariant"`
+	Outcomes         outcomePolicyJSON           `json:"outcomes"`
 }
 
 type outcomePolicyJSON struct {
@@ -171,14 +173,15 @@ type maximumSuccessfulAttemptsEvaluationJSON struct {
 }
 
 type runEvidenceJSON struct {
-	Outcome             *string                `json:"outcome"`
-	Timing              *timingJSON            `json:"timing"`
-	Setup               []setupExecutionJSON   `json:"setup"`
-	BaselineObservation *executionJSON         `json:"baseline_observation"`
-	History             historyJSON            `json:"history"`
-	Observation         *executionJSON         `json:"observation"`
-	InvariantEvaluation any                    `json:"invariant_evaluation"`
-	OutcomeEvaluation   *outcomeEvaluationJSON `json:"outcome_evaluation"`
+	Outcome             *string                    `json:"outcome"`
+	Timing              *timingJSON                `json:"timing"`
+	Setup               []setupExecutionJSON       `json:"setup"`
+	Precondition        *preconditionExecutionJSON `json:"precondition"`
+	BaselineObservation *executionJSON             `json:"baseline_observation"`
+	History             historyJSON                `json:"history"`
+	Observation         *executionJSON             `json:"observation"`
+	InvariantEvaluation any                        `json:"invariant_evaluation"`
+	OutcomeEvaluation   *outcomeEvaluationJSON     `json:"outcome_evaluation"`
 }
 
 type trialJSON struct {
@@ -393,7 +396,8 @@ func newRunReportJSON(input Input) (runReportJSON, error) {
 				Trials:           configuredTrials,
 				ReductionEnabled: reductionEnabled,
 			},
-			Setup: setupRequestsJSON(input.Scenario.Setup),
+			Setup:        setupRequestsJSON(input.Scenario.Setup),
+			Precondition: preconditionDefinition(input.Scenario.Precondition),
 			Operation: operationJSON{
 				Name:    input.Scenario.Operation.Name,
 				Request: requestFromEngine(input.Scenario.Operation.Request),
@@ -484,6 +488,7 @@ func runResultJSON(result engine.RunResult) runEvidenceJSON {
 		Outcome:             outcome,
 		Timing:              timing(result.StartedAt, result.CompletedAt),
 		Setup:               setupExecutionsJSON(result.Setup),
+		Precondition:        preconditionResult(result.Precondition),
 		BaselineObservation: executionResultJSON(result.BaselineObservation),
 		History:             historyJSON{Timing: timing(result.History.StartedAt, result.History.CompletedAt), Attempts: attempts},
 		Observation:         executionResultJSON(result.Observation),
@@ -506,10 +511,10 @@ func operationOutcomesJSON(evaluation *engine.OutcomeEvaluation) *outcomeEvaluat
 	}
 }
 
-func setupRequestsJSON(steps []engine.SetupStep) []operationJSON {
-	result := make([]operationJSON, len(steps))
+func setupRequestsJSON(steps []engine.SetupStep) []setupDefinitionJSON {
+	result := make([]setupDefinitionJSON, len(steps))
 	for index, step := range steps {
-		result[index] = operationJSON{Name: step.Name, Request: requestFromEngine(step.Request)}
+		result[index] = setupDefinitionJSON{Name: step.Name, Request: requestFromEngine(step.Request), Assertion: assertionDefinition(step.Assertion)}
 	}
 	return result
 }
@@ -517,7 +522,7 @@ func setupRequestsJSON(steps []engine.SetupStep) []operationJSON {
 func setupExecutionsJSON(steps []engine.SetupExecution) []setupExecutionJSON {
 	result := make([]setupExecutionJSON, len(steps))
 	for index, step := range steps {
-		result[index] = setupExecutionJSON{Name: step.Name, Execution: executionResultJSON(&step.Execution)}
+		result[index] = setupExecutionJSON{Name: step.Name, Execution: executionResultJSON(&step.Execution), Assertion: assertionResultJSON(step.Assertion)}
 	}
 	return result
 }

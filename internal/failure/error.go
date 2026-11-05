@@ -26,6 +26,7 @@ const (
 	CodeMissingHTTPResponse       Code = "missing_http_response"
 	CodeUnexpectedHTTPStatus      Code = "unexpected_http_status"
 	CodeSetupFailed               Code = "setup_failed"
+	CodePreconditionFailed        Code = "precondition_failed"
 	CodeOperationBatchFailed      Code = "operation_batch_failed"
 	CodeObservationFailed         Code = "observation_failed"
 	CodeInvariantInvalid          Code = "invariant_invalid"

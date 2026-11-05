@@ -144,7 +144,8 @@ preparation is not needed. The single-request mapping remains supported.
 ConcurTest runs setup requests in YAML order, waiting for each response to be
 read and closed before starting the next request. All steps run before every
 trial, including reduction trials. A change invariant captures its baseline
-after all setup steps complete. Only the test operation runs concurrently.
+after setup and the optional precondition check complete. Only the test operation
+runs concurrently.
 
 Each setup response must have a 2xx status. A failed request, timeout, or non-2xx
 response stops that trial before any remaining setup steps, baseline observation,
@@ -159,10 +160,88 @@ from previous trials.
 
 Verbose text shows every configured setup step and marks steps not reached.
 Compact text identifies the failed step. In JSON, `scenario.setup` is an ordered
-array of `{name, request}` objects, and each trial's `evidence.setup` is an ordered
-array of `{name, execution}` objects for attempted steps. An empty array (`[]`)
+array of `{name, request, assertion}` objects, and each trial's `evidence.setup` is
+an ordered array of `{name, execution, assertion}` objects for attempted steps.
+The assertion fields are null when no check was declared or no evaluation was
+available. An empty array (`[]`)
 represents no steps. A single-request mapping becomes one step with an empty
 name.
+
+## Verify setup responses and initial state
+
+A 2xx setup response does not establish that a reset succeeded. For a reset
+returning `{"ok":true}`, use a named setup step with an explicit response check:
+
+```yaml
+setup:
+  - name: Reset counter
+    request:
+      method: POST
+      path: /testing/reset
+    assert:
+      name: reset must be acknowledged
+      json_boolean_path: [ok]
+      equals: true
+```
+
+The check runs after the response has been fully read and closed, before the next
+setup step. A response containing `{"ok":false}` stops the trial before remaining
+setup, the precondition, baseline capture, or operations. Use the named list form
+even for a single checked step; the legacy request mapping remains unchanged.
+
+To verify initial state after all setup steps, add one optional `precondition`:
+
+```yaml
+precondition:
+  request:
+    method: GET
+    path: /state
+  assert:
+    name: counter must start empty
+    json_integer_path: [count]
+    equals: 0
+```
+
+This request is independent of the final `observation`. It works with state or
+history invariants, including history checks without a final observation, and
+can be used without setup. Every ordinary trial and every reduction trial repeats
+its own checks. The request must complete cleanly with a 2xx response.
+
+Both locations accept one named `assert` with exactly one of:
+
+- `json_boolean_path` with a literal Boolean `equals: true` or `equals: false`.
+- `json_integer_path` with the existing `minimum`, `maximum`, bounds pair, or
+  exclusive `equals` constraint. Values remain exact signed 64-bit integers.
+
+Names and paths must be non-empty. Object keys and zero-based array indexes use
+the same path syntax as invariants. Quoted Boolean/numeric strings are not coerced.
+Assertions do not support `change`, status lists, expressions, or string matching.
+Definitions are validated before setup can send any requests.
+
+A mismatched check is a trial error with code `precondition_failed` and exit 2
+when no other trial demonstrated a violation. Missing paths, nulls, wrong types,
+malformed or trailing JSON, and truncated bodies also prevent verification and
+stop that trial. They do not become invariant violations. HTTP execution errors
+retain their causes and cancellation identity. Ordinary failed checks allow the
+next trial to restart all preparation; parent cancellation stops new trials.
+
+Reports retain each attempted request and its assertion result, including false
+and zero observations. A null observed value means the scalar could not be
+verified; it is not a successful match. JSON includes `scenario.precondition`
+and each trial's `evidence.precondition`, both null when absent or not reached.
+Setup assertion definitions appear in `scenario.setup[].assertion`; evaluations
+appear in `evidence.setup[].assertion`. Text identifies failed and unverified
+checks; verbose text also expands successful setup checks. Selected and interrupted
+reduction trials retain the same evidence, while rejected candidates keep their
+existing bounded summaries.
+
+Checks are opt-in and only establish the declared scalar values at the moment
+they were read. A truthful reset acknowledgement does not prove the reset covered
+all relevant state. A fresh scalar value does not drain pending work, isolate
+external writes, or prevent state changing after the check. No rollback, polling,
+or automatic interpretation of response bodies is provided. When both a precondition
+and a change invariant use the same URL, the change baseline remains a separate
+request after precondition verification.
 
 ## JSON integer constraints
 

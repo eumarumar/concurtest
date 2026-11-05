@@ -188,6 +188,10 @@ Declare expected rejections with `outcomes.rejected_status_codes`; use
 See [operation outcomes](docs/scenarios.md#operation-outcomes-and-useful-work)
 for acceptance filters and limitations.
 
+Verify resets with optional setup response assertions and an initial-state
+`precondition`. A failed declared check stops the trial before operations and is
+reported as an invalid precondition. See [preparation checks](docs/scenarios.md#verify-setup-responses-and-initial-state).
+
 ## Examples — Regression and Juice Shop
 
 | Example | Scenarios | Preparation |

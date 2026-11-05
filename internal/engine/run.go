@@ -30,27 +30,44 @@ const MaxSetupSteps = 100
 // SetupStep prepares state before test operations. Name may be empty for a
 // legacy single-request setup.
 type SetupStep struct {
-	Name    string
-	Request HTTPRequest
+	Name      string
+	Request   HTTPRequest
+	Assertion *ResponseAssertion
 }
 
 // SetupExecution retains an attempted setup step, including a failed step.
 type SetupExecution struct {
 	Name      string
 	Execution HTTPExecution
+	Assertion *AssertionEvaluation
+}
+
+// Precondition checks initial state after setup and before any baseline or
+// operation. Its request and assertion are independent of the final observer.
+type Precondition struct {
+	Request   HTTPRequest
+	Assertion ResponseAssertion
+}
+
+// PreconditionExecution retains the initial-state request and its check even
+// when verification fails and no operations are allowed to start.
+type PreconditionExecution struct {
+	Execution HTTPExecution
+	Assertion *AssertionEvaluation
 }
 
 // Scenario describes the programmatic scenario supported by the initial
 // engine: ordered setup, one repeated operation, an optional observation, and
 // one invariant.
 type Scenario struct {
-	Setup       []SetupStep
-	Operation   Operation
-	Attempts    int
-	Concurrency int
-	Observation *HTTPRequest
-	Invariant   Invariant
-	Outcomes    OutcomePolicy
+	Setup        []SetupStep
+	Precondition *Precondition
+	Operation    Operation
+	Attempts     int
+	Concurrency  int
+	Observation  *HTTPRequest
+	Invariant    Invariant
+	Outcomes     OutcomePolicy
 }
 
 // EffectiveOutcomes uses a history invariant's explicit response filter for
@@ -67,9 +84,10 @@ func (s Scenario) EffectiveOutcomes() OutcomePolicy {
 // RunResult records each attempted setup step and later scenario stages.
 // Pointer fields are nil when their stage was optional or was not reached.
 type RunResult struct {
-	StartedAt   time.Time
-	CompletedAt time.Time
-	Setup       []SetupExecution
+	StartedAt    time.Time
+	CompletedAt  time.Time
+	Setup        []SetupExecution
+	Precondition *PreconditionExecution
 	// BaselineObservation is captured after setup and before operations only
 	// for a change invariant. Each trial and reduction candidate captures its own.
 	BaselineObservation *HTTPExecution
@@ -119,6 +137,31 @@ func Run(
 		}
 		if err := ctx.Err(); err != nil {
 			return result, failure.Wrap(failure.CodeSetupFailed, label+" scenario request", err)
+		}
+		if step.Assertion != nil {
+			evaluation, err := checkResponseAssertion(label, *step.Assertion, setup)
+			result.Setup[index].Assertion = evaluation
+			if err != nil {
+				return result, err
+			}
+		}
+	}
+	if definition := scenario.Precondition; definition != nil {
+		if err := ctx.Err(); err != nil {
+			return result, failure.Wrap(failure.CodePreconditionFailed, "check initial state", err)
+		}
+		execution := ExecuteHTTP(ctx, client, definition.Request)
+		result.Precondition = &PreconditionExecution{Execution: execution}
+		if err := requireSuccessfulStage("precondition", execution); err != nil {
+			return result, failure.Wrap(failure.CodePreconditionFailed, "check initial state", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return result, failure.Wrap(failure.CodePreconditionFailed, "check initial state", err)
+		}
+		evaluation, err := checkResponseAssertion("precondition", definition.Assertion, execution)
+		result.Precondition.Assertion = evaluation
+		if err != nil {
+			return result, err
 		}
 	}
 
@@ -243,6 +286,18 @@ func validateRunInput(ctx context.Context, client *http.Client, scenario Scenari
 	if err := scenario.EffectiveOutcomes().Validate(scenario.Attempts); err != nil {
 		return failure.Wrap(failure.CodeInvalidExecution, "validate operation outcomes", err)
 	}
+	for index, step := range scenario.Setup {
+		if step.Assertion != nil {
+			if err := step.Assertion.Validate(); err != nil {
+				return failure.Wrap(failure.CodeInvalidExecution, fmt.Sprintf("validate setup step %d assertion", index+1), err)
+			}
+		}
+	}
+	if scenario.Precondition != nil {
+		if err := scenario.Precondition.Assertion.Validate(); err != nil {
+			return failure.Wrap(failure.CodeInvalidExecution, "validate precondition assertion", err)
+		}
+	}
 	return nil
 }
 
@@ -251,6 +306,8 @@ func requireSuccessfulStage(stage string, execution HTTPExecution) error {
 		code := failure.CodeSetupFailed
 		if stage == "observation" || stage == "baseline observation" {
 			code = failure.CodeObservationFailed
+		} else if stage == "precondition" {
+			code = failure.CodePreconditionFailed
 		}
 		return failure.Wrap(code, stage+" scenario request", execution.Err)
 	}
