@@ -236,14 +236,15 @@ func (config outcomeConfig) policy(attempts int, invariant engine.Invariant) (en
 }
 
 type invariantConfig struct {
-	Name                      strictString   `yaml:"name"`
-	JSONIntegerPath           jsonPathConfig `yaml:"json_integer_path"`
-	Minimum                   *strictInt64   `yaml:"minimum"`
-	Maximum                   *strictInt64   `yaml:"maximum"`
-	Equals                    *strictInt64   `yaml:"equals"`
-	Change                    *strictInt64   `yaml:"change"`
-	MaximumSuccessfulAttempts *strictInt     `yaml:"maximum_successful_attempts"`
-	SuccessfulStatusCodes     strictIntList  `yaml:"successful_status_codes"`
+	All                       []invariantConfig `yaml:"all"`
+	Name                      strictString      `yaml:"name"`
+	JSONIntegerPath           jsonPathConfig    `yaml:"json_integer_path"`
+	Minimum                   *strictInt64      `yaml:"minimum"`
+	Maximum                   *strictInt64      `yaml:"maximum"`
+	Equals                    *strictInt64      `yaml:"equals"`
+	Change                    *strictInt64      `yaml:"change"`
+	MaximumSuccessfulAttempts *strictInt        `yaml:"maximum_successful_attempts"`
+	SuccessfulStatusCodes     strictIntList     `yaml:"successful_status_codes"`
 }
 
 func (config *invariantConfig) UnmarshalYAML(node *yaml.Node) error {
@@ -251,6 +252,7 @@ func (config *invariantConfig) UnmarshalYAML(node *yaml.Node) error {
 		return errors.New("invariant must be a mapping")
 	}
 	known := map[string]struct{}{
+		"all":                         {},
 		"name":                        {},
 		"json_integer_path":           {},
 		"minimum":                     {},
@@ -274,12 +276,30 @@ func (config *invariantConfig) UnmarshalYAML(node *yaml.Node) error {
 			return fmt.Errorf("invariant field %q is repeated", key.Value)
 		}
 		seen[key.Value] = struct{}{}
+		if key.Value == "all" {
+			if value.Kind != yaml.SequenceNode || len(value.Content) < 2 || len(value.Content) > engine.MaxInvariantChecks {
+				return fmt.Errorf("invariant.all must contain between 2 and %d checks", engine.MaxInvariantChecks)
+			}
+			for _, child := range value.Content {
+				if child.Kind != yaml.MappingNode {
+					return errors.New("invariant.all entries must be mappings")
+				}
+				for n := 0; n < len(child.Content); n += 2 {
+					if child.Content[n].Value == "all" {
+						return errors.New("nested all groups are not supported")
+					}
+				}
+			}
+		}
 		if (key.Value == "minimum" || key.Value == "maximum" || key.Value == "equals" || key.Value == "change") && value.Tag == "!!null" {
 			return fmt.Errorf("invariant.%s must be an integer", key.Value)
 		}
 		if key.Value == "successful_status_codes" && value.Tag == "!!null" {
 			return errors.New("invariant.successful_status_codes must be a list of integers")
 		}
+	}
+	if _, grouped := seen["all"]; grouped && len(seen) != 1 {
+		return errors.New("invariant.all cannot be combined with other invariant fields")
 	}
 
 	type plainInvariantConfig invariantConfig
@@ -491,14 +511,14 @@ func (document documentConfig) definition() (Definition, error) {
 	}
 
 	invariantName := strings.TrimSpace(string(document.Invariant.Name))
-	if invariantName == "" {
+	if invariantName == "" && document.Invariant.All == nil {
 		return Definition{}, errors.New("invariant.name must not be empty")
 	}
 	invariant, err := document.Invariant.invariant(invariantName)
 	if err != nil {
 		return Definition{}, err
 	}
-	if invariant.JSONInteger != nil && document.Observation == nil {
+	if invariant.RequiresObservation() && document.Observation == nil {
 		return Definition{}, errors.New("observation is required for a JSON integer invariant")
 	}
 
@@ -589,6 +609,24 @@ func (document documentConfig) definition() (Definition, error) {
 }
 
 func (config invariantConfig) invariant(name string) (engine.Invariant, error) {
+	if config.All != nil {
+		if name != "" || config.JSONIntegerPath.configured || config.Minimum != nil || config.Maximum != nil || config.Equals != nil || config.Change != nil || config.MaximumSuccessfulAttempts != nil || config.SuccessfulStatusCodes.configured {
+			return engine.Invariant{}, errors.New("invariant.all cannot be combined with other invariant fields")
+		}
+		group := engine.Invariant{All: make([]engine.Invariant, len(config.All))}
+		for index, member := range config.All {
+			memberName := strings.TrimSpace(string(member.Name))
+			if memberName == "" {
+				return engine.Invariant{}, fmt.Errorf("invariant.all check %d requires a name", index+1)
+			}
+			check, err := member.invariant(memberName)
+			if err != nil {
+				return engine.Invariant{}, fmt.Errorf("invariant.all check %d: %w", index+1, err)
+			}
+			group.All[index] = check
+		}
+		return group, group.Validate()
+	}
 	pathConfigured := config.JSONIntegerPath.configured
 	minimumConfigured := config.Minimum != nil
 	maximumConfigured := config.MaximumSuccessfulAttempts != nil

@@ -64,6 +64,7 @@ type CandidateResult struct {
 	Summary                TrialSummary
 	Accepted               bool
 	OutcomeRequirementsMet bool
+	ChecksComplete         bool
 	// MatchingViolations counts trials violating in the baseline's direction.
 	MatchingViolations int
 	Trials             *engine.TrialsResult
@@ -82,6 +83,8 @@ type Result struct {
 	Status         Status
 	// FailureDirection is empty when no clean baseline majority was selected.
 	FailureDirection FailureDirection
+	// FailureCheck identifies a conjunction member; empty for a single invariant.
+	FailureCheck string
 }
 
 // Duration reports the elapsed reduction time, including the baseline.
@@ -128,11 +131,11 @@ func reduce(
 		result.Status = StatusStopped
 		return result, nil
 	}
-	if !qualifies(summarize(baseline)) || !outcomesSatisfied(baseline) {
+	if !qualifies(summarize(baseline)) || !outcomesSatisfied(baseline) || !checksComplete(baseline) {
 		result.Status = StatusSkipped
 		return result, nil
 	}
-	result.FailureDirection = majorityDirection(baseline)
+	result.FailureDirection, result.FailureCheck = majorityFailure(baseline)
 	if result.FailureDirection == "" {
 		result.Status = StatusSkipped
 		return result, nil
@@ -151,7 +154,8 @@ func reduce(
 			Summary:                summarize(trialsResult),
 			Err:                    candidateErr,
 			OutcomeRequirementsMet: outcomesSatisfied(trialsResult),
-			MatchingViolations:     matchingViolations(trialsResult, result.FailureDirection),
+			ChecksComplete:         checksComplete(trialsResult),
+			MatchingViolations:     matchingViolations(trialsResult, result.FailureDirection, result.FailureCheck),
 		}
 		if candidateErr != nil {
 			candidateResult.Trials = &trialsResult
@@ -171,7 +175,7 @@ func reduce(
 			result.Status = StatusStopped
 			return result, nil
 		}
-		if qualifies(candidateResult.Summary) && candidateResult.OutcomeRequirementsMet &&
+		if qualifies(candidateResult.Summary) && candidateResult.OutcomeRequirementsMet && candidateResult.ChecksComplete &&
 			candidateResult.MatchingViolations > trials/2 {
 			candidateResult.Accepted = true
 			candidateResult.Trials = &trialsResult
@@ -282,6 +286,20 @@ func outcomesSatisfied(result engine.TrialsResult) bool {
 	}
 	for _, trial := range result.Trials {
 		if trial.Run.Outcomes == nil || !trial.Run.Outcomes.Trustworthy() {
+			return false
+		}
+	}
+	return true
+}
+
+// A violated trial may also contain an unreadable sibling check. Preserve its
+// failure verdict, but never accept incomplete evidence as a reproduction.
+func checksComplete(result engine.TrialsResult) bool {
+	if len(result.Trials) == 0 || len(result.Trials) != result.Requested {
+		return false
+	}
+	for _, trial := range result.Trials {
+		if trial.Err != nil || trial.Run.Evaluation == nil || !trial.Run.Evaluation.Complete() {
 			return false
 		}
 	}

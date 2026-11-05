@@ -22,7 +22,8 @@ A developer defines:
 ConcurTest executes the operations, records what occurred, evaluates the
 declared invariant from history or observed state, and reports violations.
 
-The selected invariant determines which evaluation path is used:
+Each declared check determines which evidence it evaluates. A conjunction can
+evaluate both history and state against one execution:
 
 ```text
 Scenario
@@ -130,8 +131,8 @@ Named setup steps may declare one optional response assertion. A separate option
 precondition request checks initial state after all setup and before a change
 baseline or operation workers. Both use a named Boolean equality or the existing
 absolute integer bounds/equality semantics. Setup and precondition assertions
-are validated before traffic. They are separate from the one post-operation
-invariant and do not add a general expression language or multiple invariants.
+are validated before traffic. They are separate from the post-operation invariant
+or conjunction. Preparation assertions do not accept groups or expressions.
 
 All preparation work belongs to the run goroutine. It completes each exchange,
 closes the body, and evaluates its check before starting another stage. Immediate
@@ -266,6 +267,10 @@ expected rejection lists and a minimum acceptance count, including an explicit
 zero for rejection-only tests. Status sets must be disjoint and the minimum must
 fit the configured attempt count. Validation happens before setup can send traffic.
 
+A conjunction does not inherit any member's response filter for acceptance:
+multiple filters need not describe the same contract. It keeps the default 2xx
+policy unless the scenario explicitly declares its accepted statuses.
+
 After operation workers join, a synchronous evaluator partitions stable attempt
 IDs into accepted, rejected, unexpected, and unknown outcomes. Missing or failed
 exchanges are unknown even if response headers were captured. HTTP statuses do
@@ -311,14 +316,46 @@ one seat cannot have multiple confirmed owners
 
 Invariant evaluation should be separate from transport execution.
 
-A scenario continues to declare exactly one invariant. The current concrete
-forms are a JSON integer constraint at a configured path and a maximum
-matching HTTP response count. JSON integer constraints support an inclusive
+A scenario declares one concrete invariant or a flat `all` conjunction of 2–10
+uniquely named concrete checks. Nested groups and mixed group/concrete fields
+are rejected before traffic. The concrete forms are a JSON integer constraint
+at a configured path and a maximum matching HTTP response count. Integer
+constraints support an inclusive
 minimum, an inclusive maximum, both bounds, exact equality, or an exact change
 from a baseline. Equality cannot be combined with bounds; change cannot be
 combined with any other constraint. A minimum must not exceed its maximum. The
 concrete forms are represented explicitly rather than through an expression
 language or plugin system.
+
+A conjunction shares the complete operation history and one final observation
+document across members. If any change check is present, one baseline response
+serves every change member before operations. Every baseline path must be valid
+before workers start. No member triggers its own request or worker. The run
+goroutine owns evaluation and reuses the exact integer evaluators, including
+overflow checks. Bounded repeated document traversal favors simple semantics
+over a shared mutable decoding cache.
+
+History members evaluate after workers join and before completion verification.
+State members evaluate after completion against the same captured response.
+Members retain their declared order, name, concrete result, or error. Evaluation
+continues after an unreadable scalar so a valid sibling can still prove failure.
+Any demonstrated violation determines the trial verdict, while errors remain
+available; absent a violation, an unreadable member is an error. A clean pass
+requires all members to evaluate successfully and the outcome policy to hold.
+An unverified completion leaves state members explicitly unattempted and stops
+later trials as before. Parent cancellation remains an orchestration error.
+
+Reduction requires complete, error-free checks in every trial, then selects the
+first declared member with a strict majority in one failure direction. Candidates
+must match that member and direction in a strict majority; unrelated member
+failures cannot substitute. The unchanged definitions preserve member identity
+without introducing user-defined failure signatures. JSON exposes ordered member
+statuses and aggregate `violated`/`complete`. A demonstrated violation can coexist
+with `complete: false` when a sibling is unreadable.
+
+This is a conjunction of existing checks, not an expression system or inferred
+business model. Observers must expose reconciliation facts such as a ledger
+mismatch; a set of weak predicates can still miss business failures.
 
 JSON integer paths traverse objects and arrays. YAML accepts string keys and
 non-negative integer indexes, normalizing indexes to decimal strings in the

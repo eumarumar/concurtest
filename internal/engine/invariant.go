@@ -12,10 +12,11 @@ import (
 	"strings"
 )
 
-// Invariant contains exactly one concrete invariant definition.
+// Invariant contains one concrete check or a flat conjunction of named checks.
 type Invariant struct {
 	JSONInteger               *JSONIntegerInvariant
 	MaximumSuccessfulAttempts *MaximumSuccessfulAttemptsInvariant
+	All                       []Invariant
 }
 
 // JSONIntegerInvariant constrains the JSON integer at one path. Bounds are
@@ -64,11 +65,78 @@ type MaximumSuccessfulAttemptsEvaluation struct {
 	Violated             bool
 }
 
-// InvariantEvaluation contains exactly one concrete evaluation.
+// InvariantEvaluation contains a concrete evaluation or ordered conjunction
+// members. Violated remains true if any evaluated member demonstrates failure.
 type InvariantEvaluation struct {
 	JSONInteger               *JSONIntegerEvaluation
 	MaximumSuccessfulAttempts *MaximumSuccessfulAttemptsEvaluation
+	All                       []CheckEvaluation
 	Violated                  bool
+}
+
+// CheckEvaluation retains a named conjunction member even if it cannot be
+// evaluated. A nil Evaluation with nil Err means the stage was not reached.
+type CheckEvaluation struct {
+	Name       string
+	Evaluation *InvariantEvaluation
+	Err        error
+}
+
+// MaxInvariantChecks bounds a flat conjunction; nested groups are unsupported.
+const MaxInvariantChecks = 10
+
+// Name returns a concrete member's name; a conjunction has no group name.
+func (i Invariant) Name() string {
+	if i.JSONInteger != nil {
+		return i.JSONInteger.Name
+	}
+	if i.MaximumSuccessfulAttempts != nil {
+		return i.MaximumSuccessfulAttempts.Name
+	}
+	return ""
+}
+
+// RequiresObservation reports whether any declared check reads final state.
+func (i Invariant) RequiresObservation() bool {
+	if i.JSONInteger != nil {
+		return true
+	}
+	for _, check := range i.All {
+		if check.JSONInteger != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// HasChange reports whether any member requires a pre-operation observation.
+func (i Invariant) HasChange() bool {
+	if i.JSONInteger != nil {
+		return i.JSONInteger.Change != nil
+	}
+	for _, check := range i.All {
+		if check.JSONInteger != nil && check.JSONInteger.Change != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// Validate checks definitions before any target traffic.
+func (i Invariant) Validate() error { return validateInvariant(i) }
+
+// Complete excludes unreadable or unattempted checks from clean passes and
+// reduction eligibility, even when another member demonstrates a violation.
+func (e InvariantEvaluation) Complete() bool {
+	if e.All != nil {
+		for _, check := range e.All {
+			if check.Err != nil || check.Evaluation == nil || !check.Evaluation.Complete() {
+				return false
+			}
+		}
+		return len(e.All) >= 2
+	}
+	return e.JSONInteger != nil || e.MaximumSuccessfulAttempts != nil
 }
 
 // EvaluateJSONInteger evaluates an invariant against one JSON document.
@@ -264,6 +332,26 @@ func validateJSONIntegerInvariant(invariant JSONIntegerInvariant) error {
 
 func validateInvariant(invariant Invariant) error {
 	definitions := 0
+	if invariant.All != nil {
+		definitions++
+		if len(invariant.All) < 2 || len(invariant.All) > MaxInvariantChecks {
+			return fmt.Errorf("all must contain between 2 and %d checks", MaxInvariantChecks)
+		}
+		names := make(map[string]bool, len(invariant.All))
+		for index, check := range invariant.All {
+			if check.All != nil {
+				return errors.New("nested all groups are not supported")
+			}
+			if err := validateInvariant(check); err != nil {
+				return fmt.Errorf("check %d: %w", index+1, err)
+			}
+			name := strings.TrimSpace(check.Name())
+			if names[name] {
+				return fmt.Errorf("all repeats check name %q", name)
+			}
+			names[name] = true
+		}
+	}
 	if invariant.JSONInteger != nil {
 		definitions++
 		if err := validateJSONIntegerInvariant(*invariant.JSONInteger); err != nil {

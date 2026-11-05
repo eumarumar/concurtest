@@ -18,22 +18,49 @@ const (
 // name, kind, path, status filter, and constraints remain fixed by construction.
 // Direction is coarse evidence, not a causal failure identity.
 func (r Result) MatchesFailure(trial engine.TrialResult) bool {
+	if r.FailureCheck != "" {
+		if trial.Run.Evaluation == nil {
+			return false
+		}
+		for _, check := range trial.Run.Evaluation.All {
+			if check.Name == r.FailureCheck {
+				if check.Err != nil || check.Evaluation == nil {
+					return false
+				}
+				trial.Run.Evaluation = check.Evaluation
+				return r.FailureDirection != "" && trialDirection(trial) == r.FailureDirection
+			}
+		}
+		return false
+	}
 	return r.FailureDirection != "" && trialDirection(trial) == r.FailureDirection
 }
 
-func majorityDirection(result engine.TrialsResult) FailureDirection {
-	for _, direction := range []FailureDirection{FailureBelow, FailureAbove} {
-		if matchingViolations(result, direction) > result.Requested/2 {
-			return direction
+// Each member keeps its identity. A majority of unrelated failing members is
+// insufficient; choose the first declared member with a direction majority.
+func majorityFailure(result engine.TrialsResult) (FailureDirection, string) {
+	names := []string{""}
+	if len(result.Trials) > 0 && result.Trials[0].Run.Evaluation != nil && result.Trials[0].Run.Evaluation.All != nil {
+		names = nil
+		for _, check := range result.Trials[0].Run.Evaluation.All {
+			names = append(names, check.Name)
 		}
 	}
-	return ""
+	for _, name := range names {
+		for _, direction := range []FailureDirection{FailureBelow, FailureAbove} {
+			if matchingViolations(result, direction, name) > result.Requested/2 {
+				return direction, name
+			}
+		}
+	}
+	return "", ""
 }
 
-func matchingViolations(result engine.TrialsResult, direction FailureDirection) int {
+func matchingViolations(result engine.TrialsResult, direction FailureDirection, name string) int {
 	count := 0
+	target := Result{FailureDirection: direction, FailureCheck: name}
 	for _, trial := range result.Trials {
-		if direction != "" && trialDirection(trial) == direction {
+		if target.MatchesFailure(trial) {
 			count++
 		}
 	}

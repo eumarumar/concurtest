@@ -58,7 +58,7 @@ type PreconditionExecution struct {
 
 // Scenario describes the programmatic scenario supported by the initial
 // engine: ordered setup, one repeated operation, an optional observation, and
-// one invariant.
+// one invariant or flat conjunction of existing checks.
 type Scenario struct {
 	Readiness    *WaitCondition
 	Setup        []SetupStep
@@ -74,7 +74,8 @@ type Scenario struct {
 
 // EffectiveOutcomes uses a history invariant's explicit response filter for
 // acceptance when the outcome policy does not supply its own filter. Otherwise
-// the policy's nil filter retains the default 2xx meaning.
+// the policy's nil filter retains the default 2xx meaning. Conjunctions do not
+// inherit an arbitrary member's filter; their outcome policy stays explicit.
 func (s Scenario) EffectiveOutcomes() OutcomePolicy {
 	policy := s.Outcomes
 	if policy.AcceptedStatusCodes == nil && s.Invariant.MaximumSuccessfulAttempts != nil {
@@ -108,8 +109,9 @@ func (r RunResult) Duration() time.Duration {
 }
 
 // Run executes a complete programmatic scenario. A non-nil error means the
-// engine could not complete a trustworthy invariant evaluation. An invariant
-// violation is represented by RunOutcomeViolated with a nil error.
+// engine could not complete every required stage or check. A demonstrated
+// violation has RunOutcomeViolated, possibly alongside an error from an
+// unreadable sibling check or unverified completion condition.
 func Run(
 	ctx context.Context,
 	client *http.Client,
@@ -176,6 +178,14 @@ func Run(
 		}
 	}
 
+	var conjunctionBaselines []int64
+	if scenario.Invariant.All != nil && scenario.Invariant.HasChange() {
+		var err error
+		conjunctionBaselines, err = captureConjunctionBaselines(ctx, client, scenario, &result)
+		if err != nil {
+			return result, err
+		}
+	}
 	var baseline *int64
 	if definition := scenario.Invariant.JSONInteger; definition != nil && definition.Change != nil {
 		observation := ExecuteHTTP(ctx, client, *scenario.Observation)
@@ -225,6 +235,9 @@ func Run(
 			Violated:                  evaluation.Violated,
 		}
 	}
+	if scenario.Invariant.All != nil {
+		result.Evaluation = evaluateConjunctionHistory(scenario.Invariant, history)
+	}
 	if scenario.Completion != nil {
 		wait := waitForCondition(ctx, client, *scenario.Completion, "completion")
 		result.Completion = &wait
@@ -237,7 +250,14 @@ func Run(
 			return result, wait.Err
 		}
 	}
-	if scenario.Invariant.MaximumSuccessfulAttempts != nil {
+	if scenario.Invariant.All != nil {
+		if err := evaluateConjunctionObservation(ctx, client, scenario, conjunctionBaselines, &result); err != nil {
+			if result.Evaluation.Violated && ctx.Err() == nil {
+				result.Outcome = RunOutcomeViolated
+			}
+			return result, err
+		}
+	} else if scenario.Invariant.MaximumSuccessfulAttempts != nil {
 		if scenario.Observation != nil {
 			observation := ExecuteHTTP(ctx, client, *scenario.Observation)
 			result.Observation = &observation
@@ -304,7 +324,7 @@ func validateRunInput(ctx context.Context, client *http.Client, scenario Scenari
 	if err := validateInvariant(scenario.Invariant); err != nil {
 		return failure.Wrap(failure.CodeInvariantInvalid, "validate scenario invariant", err)
 	}
-	if scenario.Invariant.JSONInteger != nil && scenario.Observation == nil {
+	if scenario.Invariant.RequiresObservation() && scenario.Observation == nil {
 		return failure.New(failure.CodeInvariantInvalid, "validate scenario invariant: JSON integer requires an observation")
 	}
 	if err := scenario.EffectiveOutcomes().Validate(scenario.Attempts); err != nil {

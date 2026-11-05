@@ -117,6 +117,25 @@ type maximumSuccessfulAttemptsDefinitionJSON struct {
 	SuccessfulStatusCodes []int  `json:"successful_status_codes"`
 }
 
+type allDefinitionJSON struct {
+	Type   string `json:"type"`
+	Checks []any  `json:"checks"`
+}
+
+type checkEvaluationJSON struct {
+	Name       string     `json:"name"`
+	Status     string     `json:"status"`
+	Evaluation any        `json:"evaluation"`
+	Error      *errorJSON `json:"error"`
+}
+
+type allEvaluationJSON struct {
+	Type     string                `json:"type"`
+	Checks   []checkEvaluationJSON `json:"checks"`
+	Violated bool                  `json:"violated"`
+	Complete bool                  `json:"complete"`
+}
+
 type summaryJSON struct {
 	Requested           int         `json:"requested"`
 	Completed           int         `json:"completed"`
@@ -209,6 +228,7 @@ type candidateReductionJSON struct {
 	Concurrency            int                  `json:"concurrency"`
 	Accepted               bool                 `json:"accepted"`
 	OutcomeRequirementsMet bool                 `json:"outcome_requirements_met"`
+	ChecksComplete         bool                 `json:"checks_complete"`
 	MatchingViolations     int                  `json:"matching_violations"`
 	Summary                candidateSummaryJSON `json:"summary"`
 	Error                  *errorJSON           `json:"error"`
@@ -235,6 +255,7 @@ type selectionJSON struct {
 type reductionJSON struct {
 	Status           string                      `json:"status"`
 	FailureDirection *reduction.FailureDirection `json:"failure_direction"`
+	FailureCheck     *string                     `json:"failure_check"`
 	Timing           *timingJSON                 `json:"timing"`
 	MaxCandidates    int                         `json:"max_candidates"`
 	Baseline         baselineReductionJSON       `json:"baseline"`
@@ -445,6 +466,13 @@ func runStatus(input Input) (string, error) {
 }
 
 func invariantDefinition(invariant engine.Invariant) any {
+	if invariant.All != nil {
+		checks := make([]any, len(invariant.All))
+		for index, check := range invariant.All {
+			checks[index] = invariantDefinition(check)
+		}
+		return allDefinitionJSON{Type: "all", Checks: checks}
+	}
 	if definition := invariant.JSONInteger; definition != nil {
 		return jsonIntegerDefinitionJSON{
 			Type: "json_integer", Name: definition.Name,
@@ -583,6 +611,22 @@ func invariantEvaluation(evaluation *engine.InvariantEvaluation) any {
 	if evaluation == nil {
 		return nil
 	}
+	if evaluation.All != nil {
+		checks := make([]checkEvaluationJSON, len(evaluation.All))
+		for index, member := range evaluation.All {
+			status := "not_evaluated"
+			if member.Err != nil {
+				status = "errored"
+			} else if member.Evaluation != nil {
+				status = "passed"
+				if member.Evaluation.Violated {
+					status = "violated"
+				}
+			}
+			checks[index] = checkEvaluationJSON{Name: member.Name, Status: status, Evaluation: invariantEvaluation(member.Evaluation), Error: optionalError(member.Err)}
+		}
+		return allEvaluationJSON{Type: "all", Checks: checks, Violated: evaluation.Violated, Complete: evaluation.Complete()}
+	}
 	if concrete := evaluation.JSONInteger; concrete != nil {
 		return jsonIntegerEvaluationJSON{
 			Type: "json_integer", Observed: concrete.Observed, Violated: concrete.Violated,
@@ -626,6 +670,7 @@ func reductionResultJSON(input Input) *reductionJSON {
 			Concurrency:            candidate.Candidate.Concurrency,
 			Accepted:               candidate.Accepted,
 			OutcomeRequirementsMet: candidate.OutcomeRequirementsMet,
+			ChecksComplete:         candidate.ChecksComplete,
 			MatchingViolations:     candidate.MatchingViolations,
 			Summary:                reductionSummaryJSON(candidate.Summary),
 			Error:                  optionalError(candidate.Err),
@@ -639,6 +684,7 @@ func reductionResultJSON(input Input) *reductionJSON {
 	return &reductionJSON{
 		Status:           status,
 		FailureDirection: direction,
+		FailureCheck:     optionalString(result.FailureCheck),
 		Timing:           timing(result.StartedAt, result.CompletedAt),
 		MaxCandidates:    reduction.MaxCandidates,
 		Baseline: baselineReductionJSON{

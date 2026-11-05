@@ -258,7 +258,7 @@ func TestWriteJSONReportsReductionWithoutDuplicatingBaselineEvidence(t *testing.
 		Candidates: []reduction.CandidateResult{{
 			Candidate: reduction.Candidate{Attempts: 2, Concurrency: 2},
 			Summary:   reduction.TrialSummary{Requested: 1, Completed: 1, Violated: 1},
-			Accepted:  true, OutcomeRequirementsMet: true, MatchingViolations: 1, Trials: &selected,
+			Accepted:  true, OutcomeRequirementsMet: true, ChecksComplete: true, MatchingViolations: 1, Trials: &selected,
 		}},
 		Selected:       reduction.Candidate{Attempts: 2, Concurrency: 2},
 		SelectedTrials: &selected,

@@ -40,8 +40,10 @@ operation outcome requirements below must also be met for a clean pass.
 An invariant holding is only one condition for a passing trial. Each trial must
 also meet its HTTP outcome policy. Without an `outcomes` section, ConcurTest
 requires at least one accepted response and treats other statuses as unexpected.
-Acceptance uses the history invariant's `successful_status_codes` when that
-list is configured; otherwise it accepts HTTP 200–299.
+Acceptance uses a single history invariant's `successful_status_codes` when that
+list is configured; otherwise it accepts HTTP 200–299. An `all` group keeps the
+2xx default regardless of its members' filters. Declare an explicit outcome
+policy when different response-count members use different status contracts.
 
 Declare expected rejections for the application you are testing:
 
@@ -376,7 +378,8 @@ An observation request is required for these checks. Define at least one of
 `minimum`, `maximum`, `equals`, or `change`. Do not combine `equals` with either
 bound, and keep `minimum` less than or equal to `maximum`. All constraint values must
 be integers representable as signed 64-bit values; zero and negative values are
-valid. Each scenario declares exactly one invariant.
+valid. Each concrete check declares one of these forms; a flat `all` group can
+require several named checks to hold on the same execution.
 
 In JSON reports, these checks use type `json_integer`; their definition includes
 only the configured constraints. The evaluation records `observed` and `violated`.
@@ -492,6 +495,78 @@ application's authoritative stored effects. A scalar count checks this one
 property, not every business rule; custom logical-ID comparison and automatic
 response/state reconciliation are not provided.
 
+## Check related properties together
+
+One scalar can hold while another business property fails. For example, a sender
+balance can remain nonnegative even though two ledger entries record more money
+than the balance actually lost. Use `invariant.all` to check both facts against
+the same operation history and final observation:
+
+```yaml
+observation:
+  method: GET
+  path: /testing/bank-state
+invariant:
+  all:
+    - name: Sender remains nonnegative
+      json_integer_path: [sender_cents]
+      minimum: 0
+    - name: Ledger reconciles
+      json_integer_path: [ledger_mismatch_cents]
+      equals: 0
+```
+
+The application or test adapter must expose `ledger_mismatch_cents` with the
+intended reconciliation semantics. ConcurTest checks the supplied value; it
+does not derive relationships between balances, receipts, and ledger rows.
+The rest of the scenario still declares preparation, one repeated operation,
+execution settings, and any required readiness/completion conditions.
+
+A group contains 2–10 existing concrete checks with unique, nonempty names.
+It cannot have a group name, other constraint fields, or nested `all` groups.
+Members support the existing bounds, equality, change, and matching HTTP response
+limits. Preparation assertions remain individual checks. Legacy single-check
+YAML and concrete-check definition/evaluation shapes remain supported.
+
+Every state member reads the same captured final response. All change members
+share one captured baseline response before operations, with each check reading
+its own path. An invalid baseline stops operations; a missing final path marks
+that member errored while other members still evaluate. History members use
+the same operation history and evaluate before completion verification. A failed
+completion condition leaves state members not evaluated, preserves demonstrated
+history violations, and stops further trials and reduction candidates.
+
+A clean pass requires every member to evaluate and hold, plus usable operation
+outcomes. Any demonstrated member violation keeps the violation verdict and
+exit 1, even if a sibling is unreadable; its error remains in the report. Without
+a demonstrated violation, an unreadable member gives an errored trial and exit 2.
+Parent cancellation remains interrupted execution with exit 2. Status filters on
+group history members do not change the group's default 2xx acceptance policy;
+use `outcomes` explicitly when needed. Response limits still count replies,
+including replays, rather than stored effects.
+
+Text lists every member and its result. JSON uses definition/evaluation type
+`all`, ordered `checks`, and aggregate `violated` and `complete` flags. Each member
+retains its name, `passed`/`violated`/`errored`/`not_evaluated` status, concrete
+`evaluation` or null, and `error` or null. A valid violation beside an unreadable
+check has `violated: true` and `complete: false`; unknown scalars are never zero.
+The shared exchanges are retained once per trial. Strict JSON consumers need the
+updated pre-launch schema for these variants and reduction metadata.
+
+Reduction requires complete, error-free checks in every baseline and candidate
+trial. It chooses the first declared member with a strict majority failing in
+one direction; candidates must reproduce that same member and direction in a
+strict majority. Rotating failures across different members cannot be added
+together to qualify. Reports retain the selected member as `failure_check`
+(null for single-check scenarios) and each candidate's `checks_complete` flag.
+Violations remain visible when incomplete evidence prevents reduction.
+
+Several checks improve coverage only for the properties actually declared. They
+do not infer business correctness, guarantee an atomic application snapshot, or
+exclude compensating writes and later effects. Use an authoritative observer and
+appropriate completion boundary; automatic reconciliation, expressions, and
+application models are outside this feature.
+
 ## Failure reduction
 
 Enable reduction with `execution.reduce: true`. Reduction requires setup,
@@ -502,6 +577,9 @@ requirements. Candidates must meet the same requirements. Candidates with fewer
 attempts than the minimum accepted-response requirement are not tested. Rejected
 candidate summaries retain `outcome_requirements_met`, even when their full
 trial evidence is not retained.
+
+All declared checks must also be complete and error-free in every trial. For
+groups, the reproduction rule matches a specific member as described above.
 
 The invariant definition stays fixed throughout the search. A strict majority
 of baseline trials must fail in the same direction: below or above the required

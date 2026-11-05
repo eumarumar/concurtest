@@ -168,7 +168,8 @@ Use disposable local targets; the requests change application state.
 
 ## Supported invariants
 
-Each scenario declares one invariant:
+Each scenario declares one check or a flat `invariant.all` group of 2–10 named
+checks that must all hold:
 
 | Check | YAML fields |
 | --- | --- |
@@ -183,6 +184,11 @@ separately, even when they represent one stored effect. The
 [replay control](docs/scenarios.md#idempotent-replay-control) uses an observation
 of the per-key count to check stored effects. The [scenario reference](docs/scenarios.md)
 covers syntax and evaluation rules.
+
+Use a [group of checks](docs/scenarios.md#check-related-properties-together) to
+check balance bounds and ledger reconciliation against the same history and
+observation. Reports retain each result; any demonstrated violation keeps the
+failure verdict, and an unreadable check prevents a clean pass.
 
 A clean pass also requires usable operation responses in each trial. The default
 requires at least one accepted response and no unexpected or unknown outcomes.
@@ -265,7 +271,8 @@ Report format does not change exit codes. The
 
 ## Limitations, license, and contributing
 
-- HTTP/JSON only; one repeated operation and one invariant per scenario.
+- HTTP/JSON only; one repeated operation and up to ten existing named checks
+  per scenario. No expressions or automatic business reconciliation.
 - Requests are static; YAML values do not expand environment variables or capture
   values from earlier responses.
 - Setup controls trial state; automatic rollback and resource isolation are not provided.

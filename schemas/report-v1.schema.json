@@ -91,10 +91,26 @@
         }
       }
     },
+    "all_invariant_definition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "checks"],
+      "properties": {
+        "type": { "const": "all" },
+        "checks": {
+          "type": "array", "minItems": 2, "maxItems": 10,
+          "items": { "oneOf": [
+            { "$ref": "#/$defs/json_integer_definition" },
+            { "$ref": "#/$defs/maximum_successful_attempts_definition" }
+          ] }
+        }
+      }
+    },
     "invariant_definition": {
       "oneOf": [
         { "$ref": "#/$defs/json_integer_definition" },
-        { "$ref": "#/$defs/maximum_successful_attempts_definition" }
+        { "$ref": "#/$defs/maximum_successful_attempts_definition" },
+        { "$ref": "#/$defs/all_invariant_definition" }
       ]
     },
     "outcome_policy": {
@@ -426,10 +442,55 @@
         "violated": { "type": "boolean" }
       }
     },
+    "all_check_evaluation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "status", "evaluation", "error"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["passed", "violated", "errored", "not_evaluated"] },
+        "evaluation": { "oneOf": [
+          { "$ref": "#/$defs/json_integer_evaluation" },
+          { "$ref": "#/$defs/maximum_successful_attempts_evaluation" },
+          { "type": "null" }
+        ] },
+        "error": { "oneOf": [ { "$ref": "#/$defs/error" }, { "type": "null" } ] }
+      },
+      "allOf": [
+        { "if": { "properties": { "status": { "const": "not_evaluated" } } },
+          "then": { "properties": { "evaluation": { "type": "null" }, "error": { "type": "null" } } } },
+        { "if": { "properties": { "status": { "const": "errored" } } },
+          "then": { "properties": { "evaluation": { "type": "null" }, "error": { "$ref": "#/$defs/error" } } } },
+        { "if": { "properties": { "status": { "enum": ["passed", "violated"] } } },
+          "then": { "properties": { "evaluation": { "type": "object" }, "error": { "type": "null" } } } },
+        { "if": { "properties": { "status": { "const": "passed" } } },
+          "then": { "properties": { "evaluation": { "properties": { "violated": { "const": false } } } } } },
+        { "if": { "properties": { "status": { "const": "violated" } } },
+          "then": { "properties": { "evaluation": { "properties": { "violated": { "const": true } } } } } }
+      ]
+    },
+    "all_invariant_evaluation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "checks", "violated", "complete"],
+      "properties": {
+        "type": { "const": "all" },
+        "checks": { "type": "array", "minItems": 2, "maxItems": 10, "items": { "$ref": "#/$defs/all_check_evaluation" } },
+        "violated": { "type": "boolean" },
+        "complete": { "type": "boolean" }
+      },
+      "allOf": [
+        { "if": { "properties": { "complete": { "const": true } } },
+          "then": { "properties": { "checks": { "items": { "properties": { "status": { "enum": ["passed", "violated"] } } } } } },
+          "else": { "properties": { "checks": { "contains": { "properties": { "status": { "enum": ["errored", "not_evaluated"] } } } } } } },
+        { "if": { "properties": { "violated": { "const": true } } },
+          "then": { "properties": { "checks": { "contains": { "properties": { "status": { "const": "violated" } } } } } },
+          "else": { "properties": { "checks": { "not": { "contains": { "properties": { "status": { "const": "violated" } } } } } } } }
+      ]
+    },
     "invariant_evaluation": {
       "oneOf": [
         { "$ref": "#/$defs/json_integer_evaluation" },
         { "$ref": "#/$defs/maximum_successful_attempts_evaluation" },
+        { "$ref": "#/$defs/all_invariant_evaluation" },
         { "type": "null" }
       ]
     },
@@ -513,8 +574,9 @@
     "candidate_reduction": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["number", "attempts", "concurrency", "accepted", "summary", "error", "trials", "outcome_requirements_met", "matching_violations"],
+      "required": ["number", "attempts", "concurrency", "accepted", "summary", "error", "trials", "outcome_requirements_met", "matching_violations", "checks_complete"],
       "properties": {
+        "checks_complete": { "type": "boolean" },
         "outcome_requirements_met": { "type": "boolean" },
         "matching_violations": { "type": "integer", "minimum": 0, "maximum": 100 },
         "number": { "type": "integer", "minimum": 1, "maximum": 100 },
@@ -567,8 +629,9 @@
     "reduction": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "timing", "max_candidates", "baseline", "candidates", "selection", "failure_direction"],
+      "required": ["status", "timing", "max_candidates", "baseline", "candidates", "selection", "failure_direction", "failure_check"],
       "properties": {
+        "failure_check": { "type": ["string", "null"], "minLength": 1 },
         "status": { "enum": ["skipped", "reduced", "unchanged", "limited", "stopped", "interrupted", "errored"] },
         "failure_direction": { "enum": ["below", "above", null] },
         "timing": { "$ref": "#/$defs/nullable_timing" },

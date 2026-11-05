@@ -344,6 +344,9 @@ func writeReduction(writer io.Writer, style textStyle, scenario engine.Scenario,
 	if result.FailureDirection != "" {
 		fmt.Fprintf(writer, "  Direction       %s the required value or bound\n", result.FailureDirection)
 	}
+	if result.FailureCheck != "" {
+		fmt.Fprintf(writer, "  Check           %s\n", result.FailureCheck)
+	}
 
 	if options.Verbose {
 		fmt.Fprintf(writer, "  Candidates      %d evaluated\n", len(result.Candidates))
@@ -377,6 +380,10 @@ func writeReduction(writer io.Writer, style textStyle, scenario engine.Scenario,
 			fmt.Fprintln(writer, "  Finding         Baseline operation outcomes did not meet the declared requirements; reduction needs usable outcomes.")
 		} else if baseline.Inconclusive > 0 || baseline.Errored > 0 {
 			fmt.Fprintf(writer, "  Finding         Baseline had %d inconclusive and %d errored trials; reduction needs clean results.\n", baseline.Inconclusive, baseline.Errored)
+		} else if baselineHasCheckErrors(result.Baseline) {
+			fmt.Fprintln(writer, "  Finding         Some baseline checks could not be verified; reduction needs complete results.")
+		} else if scenario.Invariant.All != nil {
+			fmt.Fprintln(writer, "  Finding         No single check and failure direction had a strict majority of baseline trials.")
 		} else if baseline.Violated > baseline.Requested/2 && result.FailureDirection == "" {
 			fmt.Fprintln(writer, "  Finding         No single failure direction had a strict majority of baseline trials.")
 		} else {
@@ -442,6 +449,9 @@ func writeCandidateResult(writer io.Writer, candidate reduction.CandidateResult)
 	}
 	if !candidate.OutcomeRequirementsMet {
 		fmt.Fprint(writer, " · outcome requirements not met")
+	}
+	if !candidate.ChecksComplete {
+		fmt.Fprint(writer, " · checks incomplete")
 	}
 	if candidate.Err != nil {
 		fmt.Fprintf(writer, " · error %s", quoted(candidate.Err.Error()))
@@ -525,6 +535,9 @@ func firstTrialWithStatus(trials []engine.TrialResult, status engine.TrialStatus
 }
 
 func writeCompactViolation(writer io.Writer, scenario engine.Scenario, trial engine.TrialResult) {
+	if trial.Err != nil {
+		fmt.Fprintf(writer, "    Additional error %s\n", quoted(trial.Err.Error()))
+	}
 	writeOutcomeEvidence(writer, trial.Run.Outcomes, "    ")
 	writeWaitEvidence(writer, "Readiness", trial.Run.Readiness, false, "    ")
 	writeWaitEvidence(writer, "Completion", trial.Run.Completion, false, "    ")
@@ -564,7 +577,7 @@ func writeCompactViolation(writer io.Writer, scenario engine.Scenario, trial eng
 		attempts = filtered
 	}
 	writeCompactAttempts(writer, attempts, description)
-	if scenario.Invariant.JSONInteger != nil {
+	if scenario.Invariant.RequiresObservation() {
 		writeCompactObservation(writer, scenario.Observation, trial.Run.Observation)
 	}
 }
@@ -783,7 +796,7 @@ func writeTrialEvidence(writer io.Writer, style textStyle, scenario engine.Scena
 			writeAssertionEvidence(writer, &scenario.Precondition.Assertion, trial.Run.Precondition.Assertion, "    ")
 		}
 	}
-	if scenario.Invariant.JSONInteger != nil && scenario.Invariant.JSONInteger.Change != nil {
+	if scenario.Invariant.HasChange() {
 		fmt.Fprintln(writer, "\n  Baseline observation")
 		if trial.Run.BaselineObservation == nil {
 			fmt.Fprintln(writer, "    Not reached.")
@@ -842,6 +855,28 @@ func writeInvariant(writer io.Writer, style textStyle, invariant engine.Invarian
 
 func writeInvariantLines(writer io.Writer, invariant engine.Invariant, evaluation *engine.InvariantEvaluation, indent string) {
 	switch {
+	case invariant.All != nil:
+		fmt.Fprintf(writer, "%sAll %d checks must hold\n", indent, len(invariant.All))
+		for index, check := range invariant.All {
+			var member engine.CheckEvaluation
+			if evaluation != nil && index < len(evaluation.All) {
+				member = evaluation.All[index]
+			}
+			status := "NOT EVALUATED"
+			if member.Err != nil {
+				status = "ERRORED"
+			} else if member.Evaluation != nil {
+				status = "PASSED"
+				if member.Evaluation.Violated {
+					status = "VIOLATED"
+				}
+			}
+			fmt.Fprintf(writer, "%sCheck #%d        %s\n", indent, index+1, status)
+			writeInvariantLines(writer, check, member.Evaluation, indent+"  ")
+			if member.Err != nil {
+				fmt.Fprintf(writer, "%s  Error           %s\n", indent, quoted(member.Err.Error()))
+			}
+		}
 	case invariant.JSONInteger != nil:
 		definition := invariant.JSONInteger
 		path := formatJSONPath(definition.Path)
@@ -882,6 +917,15 @@ func writeInvariantLines(writer io.Writer, invariant engine.Invariant, evaluatio
 		fmt.Fprintf(writer, "%sMatching        %s\n", indent, attemptIDs(historyEvaluation.SuccessfulAttemptIDs))
 		fmt.Fprintf(writer, "%sBeyond maximum   %s\n", indent, attemptIDs(historyEvaluation.OverLimitAttemptIDs))
 	}
+}
+
+func baselineHasCheckErrors(result engine.TrialsResult) bool {
+	for _, trial := range result.Trials {
+		if trial.Err != nil || (trial.Run.Evaluation != nil && !trial.Run.Evaluation.Complete()) {
+			return true
+		}
+	}
+	return false
 }
 
 func successfulStatuses(statuses []int) string {

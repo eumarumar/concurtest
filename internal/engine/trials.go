@@ -101,9 +101,10 @@ func RunTrials(
 
 func classifyTrial(result RunResult, runErr error) TrialStatus {
 	if runErr != nil {
-		// A final response-count violation is independent of settlement. Keep
-		// that finding while retaining the completion error and stopping traffic.
-		if result.Outcome == RunOutcomeViolated && result.Completion != nil && result.Completion.Err != nil {
+		// Preserve a demonstrated violation alongside an incomplete wait or
+		// unreadable sibling check. Run sets this outcome deliberately; parent
+		// cancellation remains an orchestration error in RunTrials.
+		if result.Outcome == RunOutcomeViolated && result.Evaluation != nil && result.Evaluation.Violated {
 			return TrialStatusViolated
 		}
 		return TrialStatusErrored
