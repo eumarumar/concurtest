@@ -74,6 +74,7 @@ type CandidateResult struct {
 // Result records the baseline, ordered candidate summaries, and any selected
 // observed reproduction.
 type Result struct {
+	Resources      *engine.ResourceUsage
 	StartedAt      time.Time
 	CompletedAt    time.Time
 	Baseline       engine.TrialsResult
@@ -116,13 +117,19 @@ func reduce(
 	if err := validateInput(scenario, trials); err != nil {
 		return result, err
 	}
+	execution, err := engine.NewExecution(ctx, scenario.Limits)
+	if err != nil {
+		return result, err
+	}
+	defer execution.Close()
 
 	result.StartedAt = time.Now()
 	defer func() {
 		result.CompletedAt = time.Now()
+		result.Resources = execution.Snapshot()
 	}()
 
-	baseline, err := engine.RunTrials(ctx, client, scenario, trials)
+	baseline, err := execution.RunTrials(client, scenario, trials)
 	result.Baseline = baseline
 	if err != nil {
 		return result, failure.Wrap(failure.CodeReductionBaselineFailed, "run reduction baseline", err)
@@ -148,7 +155,7 @@ func reduce(
 		candidateScenario.Attempts = candidate.Attempts
 		candidateScenario.Concurrency = candidate.Concurrency
 
-		trialsResult, candidateErr := engine.RunTrials(ctx, client, candidateScenario, trials)
+		trialsResult, candidateErr := execution.RunTrials(client, candidateScenario, trials)
 		candidateResult := CandidateResult{
 			Candidate:              candidate,
 			Summary:                summarize(trialsResult),

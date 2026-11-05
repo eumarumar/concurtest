@@ -10,8 +10,8 @@ import (
 
 // All change checks read the same pre-operation document. A missing baseline
 // stops the run before any operation; no check borrows another trial's state.
-func captureConjunctionBaselines(ctx context.Context, client *http.Client, scenario Scenario, result *RunResult) ([]int64, error) {
-	observation := ExecuteHTTP(ctx, client, *scenario.Observation)
+func (e *Execution) captureConjunctionBaselines(ctx context.Context, client *http.Client, scenario Scenario, result *RunResult) ([]int64, error) {
+	observation := e.executeHTTP(ctx, client, *scenario.Observation)
 	result.BaselineObservation = &observation
 	if err := requireSuccessfulStage("baseline observation", observation); err != nil {
 		return nil, err
@@ -57,10 +57,10 @@ func evaluateConjunctionHistory(invariant Invariant, history History) *Invariant
 
 // One final exchange serves every state check. Unreadable members retain errors;
 // evaluation continues so a later valid check can still demonstrate a violation.
-func evaluateConjunctionObservation(ctx context.Context, client *http.Client, scenario Scenario, baselines []int64, result *RunResult) error {
+func (e *Execution) evaluateConjunctionObservation(ctx context.Context, client *http.Client, scenario Scenario, baselines []int64, result *RunResult) error {
 	var observationErr error
 	if scenario.Observation != nil {
-		observation := ExecuteHTTP(ctx, client, *scenario.Observation)
+		observation := e.executeHTTP(ctx, client, *scenario.Observation)
 		result.Observation = &observation
 		observationErr = requireSuccessfulStage("observation", observation)
 		if observationErr == nil && observation.Response.BodyTruncated && scenario.Invariant.RequiresObservation() {

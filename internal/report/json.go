@@ -1,7 +1,6 @@
 package report
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -69,6 +68,7 @@ type executionConfigJSON struct {
 }
 
 type scenarioJSON struct {
+	Limits           limitsJSON                  `json:"limits"`
 	Path             string                      `json:"path"`
 	Name             string                      `json:"name"`
 	Target           string                      `json:"target"`
@@ -155,16 +155,18 @@ type responseExcerptJSON struct {
 }
 
 type responseJSON struct {
-	StatusCode  int                  `json:"status_code"`
-	BodyExcerpt *responseExcerptJSON `json:"body_excerpt"`
+	EvidenceTruncated bool                 `json:"evidence_truncated"`
+	StatusCode        int                  `json:"status_code"`
+	BodyExcerpt       *responseExcerptJSON `json:"body_excerpt"`
 }
 
 type executionJSON struct {
-	Request       requestJSON   `json:"request"`
-	Response      *responseJSON `json:"response"`
-	Timing        *timingJSON   `json:"timing"`
-	Error         *errorJSON    `json:"error"`
-	RequestWrites int64         `json:"request_writes"`
+	RequestDataTruncated bool          `json:"request_data_truncated"`
+	Request              requestJSON   `json:"request"`
+	Response             *responseJSON `json:"response"`
+	Timing               *timingJSON   `json:"timing"`
+	Error                *errorJSON    `json:"error"`
+	RequestWrites        int64         `json:"request_writes"`
 }
 
 type attemptJSON struct {
@@ -268,6 +270,7 @@ type reproductionJSON struct {
 }
 
 type runReportJSON struct {
+	Resources     *resourcesJSON   `json:"resources"`
 	SchemaVersion string           `json:"schema_version"`
 	ReportType    string           `json:"report_type"`
 	Status        string           `json:"status"`
@@ -310,10 +313,13 @@ func WriteJSON(writer io.Writer, input Input) error {
 	if err != nil {
 		return failure.Wrap(failure.CodeReportInvalid, "write JSON report", err)
 	}
-	return writeJSONValue(writer, report)
+	return writeJSONValueLimit(writer, report, input.Scenario.Limits.Effective().MaxReportBytes)
 }
 
 func validateJSONInput(input Input) error {
+	if err := input.Scenario.Limits.Validate(); err != nil {
+		return err
+	}
 	if strings.TrimSpace(input.ScenarioPath) == "" {
 		return errors.New("scenario path is empty")
 	}
@@ -383,19 +389,18 @@ func WriteJSONError(writer io.Writer, input ErrorInput) error {
 }
 
 func writeJSONValue(writer io.Writer, value any) error {
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
+	return writeJSONValueLimit(writer, value, (engine.Limits{}).Effective().MaxReportBytes)
+}
+
+func writeJSONValueLimit(writer io.Writer, value any, maximum int64) error {
+	if !reportFits(value, maximum) {
+		return reportLimitError(maximum)
+	}
+	encoder := json.NewEncoder(exactWriter{writer})
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(value); err != nil {
 		return failure.Wrap(failure.CodeReportWriteFailed, "encode JSON report", err)
-	}
-	written, err := writer.Write(buffer.Bytes())
-	if err == nil && written != buffer.Len() {
-		err = io.ErrShortWrite
-	}
-	if err != nil {
-		return failure.Wrap(failure.CodeReportWriteFailed, "write JSON report", err)
 	}
 	return nil
 }
@@ -415,6 +420,7 @@ func newRunReportJSON(input Input) (runReportJSON, error) {
 		ReportType:    "run",
 		Status:        status,
 		Scenario: scenarioJSON{
+			Limits:           configuredLimits(input.Scenario.Limits),
 			Path:             input.ScenarioPath,
 			Name:             input.ScenarioName,
 			Target:           input.Target,
@@ -442,6 +448,7 @@ func newRunReportJSON(input Input) (runReportJSON, error) {
 			},
 		},
 		Summary:      resultSummary(input.Result),
+		Resources:    resourceUsageJSON(input),
 		Trials:       trialsJSON(input.Result.Trials),
 		Reduction:    reductionResultJSON(input),
 		Error:        optionalError(input.RunError),
@@ -574,18 +581,19 @@ func executionResultJSON(execution *engine.HTTPExecution) *executionJSON {
 	}
 	var response *responseJSON
 	if execution.Response != nil {
-		response = &responseJSON{StatusCode: execution.Response.StatusCode}
+		response = &responseJSON{StatusCode: execution.Response.StatusCode, EvidenceTruncated: execution.Response.EvidenceTruncated}
 		if len(execution.Response.Body) > 0 || execution.Response.BodyTruncated {
 			excerpt := responseExcerptJSONValue(execution.Response)
 			response.BodyExcerpt = &excerpt
 		}
 	}
 	return &executionJSON{
-		Request:       requestFromEngine(execution.Request),
-		Response:      response,
-		Timing:        timing(execution.StartedAt, execution.CompletedAt),
-		Error:         optionalError(execution.Err),
-		RequestWrites: execution.RequestWrites,
+		RequestDataTruncated: execution.RequestDataTruncated,
+		Request:              requestFromEngine(execution.Request),
+		Response:             response,
+		Timing:               timing(execution.StartedAt, execution.CompletedAt),
+		Error:                optionalError(execution.Err),
+		RequestWrites:        execution.RequestWrites,
 	}
 }
 

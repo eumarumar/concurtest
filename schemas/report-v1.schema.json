@@ -256,11 +256,41 @@
         { "type": "null" }
       ]
     },
+    "limits": {
+      "type": "object", "additionalProperties": false,
+      "required": ["max_attempts", "max_concurrency", "max_total_attempts", "max_exchanges", "max_retained_bytes", "max_duration_ns", "max_report_bytes"],
+      "properties": {
+        "max_attempts": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "max_concurrency": { "type": "integer", "minimum": 1, "maximum": 256 },
+        "max_total_attempts": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "max_exchanges": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "max_retained_bytes": { "type": "integer", "minimum": 1, "maximum": 67108864 },
+        "max_duration_ns": { "type": "integer", "minimum": 1, "maximum": 1800000000000 },
+        "max_report_bytes": { "type": "integer", "minimum": 1, "maximum": 67108864 }
+      }
+    },
+    "resources": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["attempt_slots", "exchanges", "retained_bytes", "elapsed_ns", "exhausted"],
+          "properties": {
+            "attempt_slots": { "type": "integer", "minimum": 0, "maximum": 100000 },
+            "exchanges": { "type": "integer", "minimum": 0, "maximum": 100000 },
+            "retained_bytes": { "type": "integer", "minimum": 0, "maximum": 67108864 },
+            "elapsed_ns": { "type": "integer", "minimum": 0 },
+            "exhausted": { "type": ["string", "null"], "minLength": 1 }
+          }
+        }
+      ]
+    },
     "scenario": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "name", "target", "request_timeout_ns", "execution", "setup", "precondition", "readiness", "completion", "operation", "observation", "invariant", "outcomes"],
+      "required": ["path", "name", "target", "request_timeout_ns", "execution", "setup", "precondition", "readiness", "completion", "operation", "observation", "invariant", "outcomes", "limits"],
       "properties": {
+        "limits": { "$ref": "#/$defs/limits" },
         "readiness": { "$ref": "#/$defs/wait_definition" },
         "completion": { "$ref": "#/$defs/wait_definition" },
         "precondition": { "$ref": "#/$defs/precondition_definition" },
@@ -360,8 +390,9 @@
     "response": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status_code", "body_excerpt"],
+      "required": ["status_code", "body_excerpt", "evidence_truncated"],
       "properties": {
+        "evidence_truncated": { "type": "boolean" },
         "status_code": { "type": "integer", "minimum": 0, "maximum": 999 },
         "body_excerpt": {
           "oneOf": [
@@ -374,8 +405,9 @@
     "execution": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["request", "response", "timing", "error", "request_writes"],
+      "required": ["request", "response", "timing", "error", "request_writes", "request_data_truncated"],
       "properties": {
+        "request_data_truncated": { "type": "boolean" },
         "request_writes": { "type": "integer", "minimum": 0 },
         "request": { "$ref": "#/$defs/request" },
         "response": {
@@ -652,8 +684,9 @@
     "run_report": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "report_type", "status", "scenario", "summary", "trials", "reduction", "error", "reproduction"],
+      "required": ["schema_version", "report_type", "status", "scenario", "summary", "trials", "reduction", "error", "reproduction", "resources"],
       "properties": {
+        "resources": { "$ref": "#/$defs/resources" },
         "schema_version": { "const": "1.0.0" },
         "report_type": { "const": "run" },
         "status": { "enum": ["passed", "violated", "inconclusive", "errored", "interrupted"] },

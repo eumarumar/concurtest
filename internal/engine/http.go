@@ -26,21 +26,23 @@ type HTTPRequest struct {
 
 // HTTPResponse records the externally visible result of an HTTP request.
 type HTTPResponse struct {
-	StatusCode    int
-	Header        http.Header
-	Body          []byte
-	BodyTruncated bool
+	StatusCode        int
+	Header            http.Header
+	Body              []byte
+	BodyTruncated     bool
+	EvidenceTruncated bool
 }
 
 // HTTPExecution records one request attempt and its timing information.
 // Err is nil when the request and response were exchanged successfully without
 // an observed retry, regardless of the HTTP status code.
 type HTTPExecution struct {
-	Request     HTTPRequest
-	Response    *HTTPResponse
-	StartedAt   time.Time
-	CompletedAt time.Time
-	Err         error
+	Request              HTTPRequest
+	Response             *HTTPResponse
+	StartedAt            time.Time
+	CompletedAt          time.Time
+	Err                  error
+	RequestDataTruncated bool
 	// RequestWrites counts observed complete request-header writes, including
 	// retries. It does not count committed effects or prove delivery. Zero means
 	// no writes were observed (custom transports may not emit trace events).
@@ -57,8 +59,17 @@ func (e HTTPExecution) Duration() time.Duration {
 // Redirects are not followed. Observed transport retries are execution errors;
 // their final response is retained, but cannot establish a clean pass.
 func ExecuteHTTP(ctx context.Context, client *http.Client, request HTTPRequest) (execution HTTPExecution) {
+	owner, err := NewExecution(ctx, Limits{})
+	if err != nil {
+		return HTTPExecution{Request: HTTPRequest{Method: request.Method, URL: request.URL}, StartedAt: time.Now(), CompletedAt: time.Now(), Err: err, RequestDataTruncated: len(request.Body) > 0 || len(request.Header) > 0}
+	}
+	defer owner.Close()
+	return owner.executeHTTP(owner.ctx, client, request)
+}
+
+func (e *Execution) executeHTTP(ctx context.Context, client *http.Client, request HTTPRequest) (execution HTTPExecution) {
 	var requestWrites atomic.Int64
-	execution.Request = cloneHTTPRequest(request)
+	execution.Request = HTTPRequest{Method: request.Method, URL: request.URL}
 	execution.StartedAt = time.Now()
 	defer func() {
 		execution.RequestWrites = requestWrites.Load()
@@ -69,6 +80,9 @@ func ExecuteHTTP(ctx context.Context, client *http.Client, request HTTPRequest) 
 			} else {
 				execution.Err = failure.Wrap(failure.CodeRequestRetried, message, execution.Err)
 			}
+		}
+		if failure.CodeOf(e.cause()) == failure.CodeResourceLimit {
+			execution.Err = failure.Join(failure.CodeResourceLimit, "execution budget exhausted", e.cause(), execution.Err)
 		}
 		execution.CompletedAt = time.Now()
 	}()
@@ -81,6 +95,38 @@ func ExecuteHTTP(ctx context.Context, client *http.Client, request HTTPRequest) 
 		execution.Err = failure.New(failure.CodeInvalidExecution, "execute HTTP request: nil client")
 		return execution
 	}
+	if err := ctx.Err(); err != nil {
+		execution.Err = e.cause()
+		if execution.Err == nil {
+			execution.Err = err
+		}
+		execution.RequestDataTruncated = true
+		return execution
+	}
+	if err := e.claim(&e.exchanges, 1, e.limits.MaxExchanges, "max_exchanges"); err != nil {
+		execution.Err = err
+		execution.RequestDataTruncated = true
+		return execution
+	}
+	if len(request.Body) > MaxHTTPBodyBytes {
+		execution.Err = e.fail("max_request_body_bytes", MaxHTTPBodyBytes)
+		execution.RequestDataTruncated = true
+		return execution
+	}
+	headers := headerBytes(request.Header)
+	if headers > MaxHTTPHeaderBytes {
+		execution.Err = e.fail("max_header_bytes", MaxHTTPHeaderBytes)
+		execution.RequestDataTruncated = true
+		return execution
+	}
+	for _, size := range []int64{int64(len(request.Method)), int64(len(request.URL)), int64(len(request.Body)), headers} {
+		if err := e.claim(&e.retained, size, e.limits.MaxRetainedBytes, "max_retained_bytes"); err != nil {
+			execution.Err = err
+			execution.RequestDataTruncated = true
+			return execution
+		}
+	}
+	execution.Request = cloneHTTPRequest(request)
 
 	// Header writes occur before the request body and response complete. Counting
 	// them also covers early responses while a body is still being sent. Trace
@@ -110,29 +156,47 @@ func ExecuteHTTP(ctx context.Context, client *http.Client, request HTTPRequest) 
 	httpResponse, err := executionClient.Do(httpRequest)
 	if err != nil {
 		if httpResponse != nil {
-			execution.Response = responseMetadata(httpResponse)
+			execution.Response = &HTTPResponse{StatusCode: httpResponse.StatusCode, EvidenceTruncated: true}
 		}
 		execution.Err = failure.Wrap(failure.CodeRequestSendFailed, "send HTTP request", err)
 		return execution
 	}
+	response := &HTTPResponse{StatusCode: httpResponse.StatusCode}
+	execution.Response = response
+	headers = headerBytes(httpResponse.Header)
+	var metadataErr error
+	if headers > MaxHTTPHeaderBytes {
+		metadataErr = e.fail("max_header_bytes", MaxHTTPHeaderBytes)
+	} else {
+		metadataErr = e.claim(&e.retained, headers, e.limits.MaxRetainedBytes, "max_retained_bytes")
+	}
+	if metadataErr != nil {
+		response.EvidenceTruncated, response.BodyTruncated = true, true
+		execution.Err = failure.Join(failure.CodeResourceLimit, "capture response metadata", metadataErr, httpResponse.Body.Close())
+		return execution
+	}
+	response.Header = httpResponse.Header.Clone()
 
 	body, readErr := io.ReadAll(io.LimitReader(httpResponse.Body, MaxHTTPBodyBytes+1))
 	closeErr := httpResponse.Body.Close()
 
-	response := responseMetadata(httpResponse)
 	if len(body) > MaxHTTPBodyBytes {
 		body = body[:MaxHTTPBodyBytes]
 		response.BodyTruncated = true
 	}
-	response.Body = body
-	execution.Response = response
+	kept, budgetErr := e.retainBody(body)
+	response.Body = bytes.Clone(body[:kept])
+	if budgetErr != nil {
+		response.EvidenceTruncated, response.BodyTruncated = true, true
+	}
 
-	if readErr != nil || closeErr != nil {
+	if readErr != nil || closeErr != nil || budgetErr != nil {
 		execution.Err = failure.Join(
 			failure.CodeResponseFailed,
 			"read HTTP response",
 			failure.Wrap(failure.CodeResponseReadFailed, "read HTTP response body", readErr),
 			failure.Wrap(failure.CodeResponseCloseFailed, "close HTTP response body", closeErr),
+			budgetErr,
 		)
 	}
 
@@ -145,12 +209,5 @@ func cloneHTTPRequest(request HTTPRequest) HTTPRequest {
 		URL:    request.URL,
 		Header: request.Header.Clone(),
 		Body:   bytes.Clone(request.Body),
-	}
-}
-
-func responseMetadata(response *http.Response) *HTTPResponse {
-	return &HTTPResponse{
-		StatusCode: response.StatusCode,
-		Header:     response.Header.Clone(),
 	}
 }

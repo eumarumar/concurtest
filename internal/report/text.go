@@ -142,7 +142,17 @@ func WriteTextWithOptions(writer io.Writer, input Input, options TextOptions) er
 		return failure.Wrap(failure.CodeReportInvalid, "", err)
 	}
 
-	buffer := bufio.NewWriter(writer)
+	maximum := input.Scenario.Limits.Effective().MaxReportBytes
+	if options.Verbose {
+		model, err := newRunReportJSON(input)
+		if err != nil {
+			return err
+		}
+		if !reportFits(model, maximum) {
+			return reportLimitError(maximum)
+		}
+	}
+	buffer := bufio.NewWriter(&budgetWriter{writer: writer, remaining: maximum, maximum: maximum})
 	style := textStyle{color: options.Color}
 	counts := trialCounts(input.Result.Trials)
 
@@ -169,6 +179,7 @@ func WriteTextWithOptions(writer io.Writer, input Input, options TextOptions) er
 	fmt.Fprintf(buffer, "  Duration        %s\n", displayDuration(input.Result.Duration()))
 	writeWaitDefinition(buffer, "Readiness", input.Scenario.Readiness)
 	writeWaitDefinition(buffer, "Completion", input.Scenario.Completion)
+	writeResources(buffer, input)
 
 	writeInvariantSummary(buffer, style, input.Scenario.Invariant, firstEvaluation(input.Result.Trials))
 	fmt.Fprintf(buffer, "\n%s\n", style.heading("Operation outcomes"))
@@ -241,6 +252,9 @@ func resultLabel(input Input) (string, error) {
 }
 
 func validateTextInput(input Input) error {
+	if err := input.Scenario.Limits.Validate(); err != nil {
+		return err
+	}
 	if input.Result.Requested < 1 || input.Result.Requested > engine.MaxTrials {
 		return fmt.Errorf("write text report: invalid requested trial count %d", input.Result.Requested)
 	}
@@ -339,6 +353,9 @@ func writeTrialCollection(writer io.Writer, style textStyle, scenario engine.Sce
 
 func writeReduction(writer io.Writer, style textStyle, scenario engine.Scenario, result reduction.Result, runErr error, options TextOptions) {
 	status := reductionStatusLabel(result.Status, runErr)
+	if runErr != nil && result.Resources != nil && result.Resources.Exhausted != "" && !errors.Is(runErr, context.Canceled) && !errors.Is(runErr, context.DeadlineExceeded) {
+		status = "RESOURCE LIMIT REACHED"
+	}
 	fmt.Fprintf(writer, "\n%s\n", style.heading("Reduction"))
 	fmt.Fprintf(writer, "  Status          %s\n", style.status(status))
 	if result.FailureDirection != "" {
@@ -718,6 +735,9 @@ func writeCompactStage(writer io.Writer, label string, execution *engine.HTTPExe
 }
 
 func writeCompactExecutionDetails(writer io.Writer, execution *engine.HTTPExecution, indent string) {
+	if execution.RequestDataTruncated || (execution.Response != nil && execution.Response.EvidenceTruncated) {
+		fmt.Fprintf(writer, "%sEvidence        Some request or response data was not retained.\n", indent)
+	}
 	if execution.RequestWrites > 1 {
 		fmt.Fprintf(writer, "%sRequest writes  %d (automatic retry)\n", indent, execution.RequestWrites)
 	}
@@ -1027,6 +1047,9 @@ func writeExecution(writer io.Writer, execution *engine.HTTPExecution, indent st
 }
 
 func writeExecutionDetails(writer io.Writer, execution *engine.HTTPExecution, indent string) {
+	if execution.RequestDataTruncated || (execution.Response != nil && execution.Response.EvidenceTruncated) {
+		fmt.Fprintf(writer, "%sEvidence        Some request or response data was not retained.\n", indent)
+	}
 	fmt.Fprintf(writer, "%sRequest writes  %d\n", indent, execution.RequestWrites)
 	if execution.Response != nil && (len(execution.Response.Body) > 0 || execution.Response.BodyTruncated) {
 		fmt.Fprintf(writer, "%sResponse        %s\n", indent, responseExcerpt(execution.Response))

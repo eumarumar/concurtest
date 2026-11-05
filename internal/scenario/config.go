@@ -88,6 +88,7 @@ type documentConfig struct {
 	Observation    *requestConfig      `yaml:"observation"`
 	Invariant      invariantConfig     `yaml:"invariant"`
 	Outcomes       outcomeConfig       `yaml:"outcomes"`
+	Limits         limitsConfig        `yaml:"limits"`
 }
 
 type requestConfig struct {
@@ -489,6 +490,13 @@ func (document documentConfig) definition() (Definition, error) {
 			document.Execution.Attempts,
 		)
 	}
+	limits, err := document.Limits.limits()
+	if err != nil {
+		return Definition{}, err
+	}
+	if err := limits.ValidateWork(int(document.Execution.Attempts), int(document.Execution.Concurrency)); err != nil {
+		return Definition{}, err
+	}
 	if document.Execution.Trials < 1 || document.Execution.Trials > engine.MaxTrials {
 		return Definition{}, fmt.Errorf(
 			"execution.trials must be between 1 and %d",
@@ -591,6 +599,7 @@ func (document documentConfig) definition() (Definition, error) {
 		Trials:         int(document.Execution.Trials),
 		Reduce:         bool(document.Execution.Reduce),
 		Scenario: engine.Scenario{
+			Limits:       limits,
 			Setup:        setup,
 			Readiness:    readiness,
 			Completion:   completion,

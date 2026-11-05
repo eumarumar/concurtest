@@ -38,6 +38,7 @@ type TrialResult struct {
 
 // TrialsResult records a sequential, ordered sequence of scenario trials.
 type TrialsResult struct {
+	Resources   *ResourceUsage
 	Requested   int
 	Trials      []TrialResult
 	StartedAt   time.Time
@@ -62,6 +63,21 @@ func RunTrials(
 	scenario Scenario,
 	count int,
 ) (result TrialsResult, trialsErr error) {
+	execution, err := NewExecution(ctx, scenario.Limits)
+	if err != nil {
+		return result, err
+	}
+	defer execution.Close()
+	return execution.RunTrials(client, scenario, count)
+}
+
+// RunTrials shares this execution's counters and deadline with earlier trials
+// or reduction candidates. Scenario limits must match the owner's limits.
+func (e *Execution) RunTrials(client *http.Client, scenario Scenario, count int) (result TrialsResult, trialsErr error) {
+	ctx := e.ctx
+	if scenario.Limits.Effective() != e.limits {
+		return result, failure.New(failure.CodeInvalidExecution, "scenario limits differ from execution owner")
+	}
 	if count < 1 || count > MaxTrials {
 		return result, failure.New(failure.CodeInvalidExecution, fmt.Sprintf("validate trial count: must be between 1 and %d: %d", MaxTrials, count))
 	}
@@ -71,6 +87,10 @@ func RunTrials(
 	defer func() {
 		result.CompletedAt = time.Now()
 		result.Status = aggregateTrialStatus(result.Trials)
+		result.Resources = e.Snapshot()
+		if trialsErr != nil && e.cause() != nil {
+			trialsErr = failure.Wrap(failure.CodeTrialSequenceInterrupted, "execution stopped", e.cause())
+		}
 	}()
 	if err := validateRunInput(ctx, client, scenario); err != nil {
 		return result, err
@@ -80,7 +100,7 @@ func RunTrials(
 		if err := ctx.Err(); err != nil {
 			return result, failure.Wrap(failure.CodeTrialSequenceInterrupted, "run trial sequence", err)
 		}
-		run, runErr := Run(ctx, client, scenario)
+		run, runErr := e.run(client, scenario)
 		result.Trials = append(result.Trials, TrialResult{
 			Number: number,
 			Status: classifyTrial(run, runErr),

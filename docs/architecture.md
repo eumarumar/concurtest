@@ -533,6 +533,52 @@ presentation flags. JSON reproduction arguments retain `--format json`.
 
 ## Performance
 
+### Execution resource ownership
+
+`engine.Execution` owns one normalized `Limits` value, cooperative deadline,
+cancel cause, and mutex-protected cumulative counters. Package-level Run,
+RunTrials, ExecuteConcurrent, and ExecuteHTTP create and close their owner.
+Reduction creates one owner and reuses its RunTrials method for the baseline and
+every candidate. Limits must match the owner's configuration. This keeps budget
+state explicit across packages without globals or context-value control state.
+Close cancels work and stops the timer; Snapshot returns an independent checkpoint.
+
+Per-trial attempt and worker ceilings validate before allocations or preparation.
+Cumulative attempt slots reserve before history allocation; the caller produces
+indexes into a worker-sized queue and closes it. Workers keep exclusive history
+slots and are joined before returning. Admission and byte counters share a mutex;
+cancel callbacks never run while that mutex is held. No budget-monitor goroutine
+or polling worker is introduced. Context timeout causes distinguish the execution
+deadline from an earlier parent deadline.
+
+All HTTP stages use the owner, including waits and shared conjunction observations.
+Requests snapshot before workers start, while each recorded exchange owns its
+captured data. Evidence reservations precede request/header cloning; captured
+bodies are limited, charged, and copied into their retained prefix so a short
+slice cannot keep an oversized backing array alive. Exhaustion cancels admission,
+retains marked partial evidence, and prevents later resets. Complete responses
+received at an external cancellation boundary remain available. Earlier invariant
+violations retain their trial classification, while the incomplete orchestration
+still returns an error. Resource snapshots include all candidate work and do not
+refund discarded candidate evidence.
+
+Count limits bound metadata separately from conservative evidence-byte charges.
+They do not claim to measure process RSS: active read buffers, transport internals,
+allocator overhead, and caller inputs remain outside those charges. Time limits
+are cooperative and do not cancel accepted target effects or bound a blocked
+custom client/close operation. See the scenario reference for defaults and hard
+ceilings, including request body and header caps.
+
+The report model has its own size budget. encoding/json buffers a complete value
+before writing, so wrapping its writer alone cannot prevent an oversized encoding
+allocation. A reflection preflight walks only the closed report structs, bounds
+escaped strings/scalars/indentation conservatively, and recognizes time.Time as
+the model's sole custom JSON marshaler. New report field types must preserve that
+assumption. Oversized JSON/verbose models fail before encoding; the extra full
+JSON output buffer was removed. Compact text uses a streaming guard. JSON budget
+failure yields a small CLI error envelope with exit 2; detailed evidence is not
+silently omitted or written to an artifact file.
+
 ConcurTest should efficiently run many simultaneous network operations, but raw throughput is not the primary product goal.
 
 Correct execution histories and trustworthy results are more important than artificially high request-per-second benchmarks.

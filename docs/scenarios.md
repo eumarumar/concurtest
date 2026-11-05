@@ -567,6 +567,93 @@ exclude compensating writes and later effects. Use an authoritative observer and
 appropriate completion boundary; automatic reconciliation, expressions, and
 application models are outside this feature.
 
+## Execution limits
+
+Limits apply by default to every run. The baseline, repeated trials, setup,
+precondition/baseline observations, readiness/completion polls, and reduction
+candidates share one execution budget. A rejected candidate does not reset or
+refund it. Configure the optional top-level `limits` mapping:
+
+```yaml
+limits:
+  max_attempts: 1000
+  max_concurrency: 64
+  max_total_attempts: 10000
+  max_exchanges: 20000
+  max_retained_bytes: 16777216
+  max_duration: 2m
+  max_report_bytes: 33554432
+```
+
+| Limit | Default | Hard ceiling |
+| --- | --- | --- |
+| Attempts per trial | 1,000 | 10,000 |
+| Concurrent operation workers | 64 | 256 |
+| Cumulative reserved attempt slots | 10,000 | 100,000 |
+| Cumulative HTTP exchange admissions | 20,000 | 100,000 |
+| Cumulative evidence accounting | 16 MiB | 64 MiB |
+| Execution time | 2 minutes | 30 minutes |
+| Main report output budget | 32 MiB | 64 MiB |
+
+Values must be positive; duration uses Go duration syntax. Omitted fields use
+defaults. CLI attempt/concurrency overrides remain subject to these limits.
+Invalid per-trial sizes are rejected before work arrays, workers, or target
+traffic. Attempt slots are reserved before allocating each operation history,
+including slots left unstarted by cancellation. The job queue holds at most one
+worker group's indexes instead of allocating an entry for every attempt.
+Exchange admissions include setup and polling as well as operations, and may
+count a request rejected before delivery. They are not counts of target effects.
+
+Evidence accounting charges captured request methods/targets, copied payloads,
+headers with conservative entry overhead, and response bodies. It also charges
+the operation request snapshot and full poll capture before its 512-byte evidence
+trim. Rejected candidates and discarded buffers are not refunded. This keeps a
+cumulative bound even when evidence would later be garbage collected; it is not
+a process RSS measurement. Fixed metadata records have separate count bounds.
+HTTP response capture remains at most 1 MiB per exchange. Request bodies now have
+the same 1 MiB ceiling, and captured HTTP headers have a 64 KiB accounting ceiling.
+The CLI also limits received response headers to 64 KiB in its HTTP transport.
+
+On exhaustion, no later trial or candidate is started. The active operation
+workers receive cancellation and are joined; responses close before returning.
+Lightweight metadata and any retained body prefix remain available, with explicit
+`request_data_truncated`, response `evidence_truncated`, and body-excerpt
+`truncated` flags. Incomplete observations cannot establish a clean pass.
+Already-demonstrated violations, including trustworthy partial response-count
+violations, remain in the trial evidence. The overall incomplete execution exits
+2 and its structured error includes `resource_limit`, even when an earlier trial
+demonstrated a violation. Parent cancellation/deadlines retain their identity;
+an execution's own deadline is reported as `max_duration` exhaustion.
+
+Reports show effective `scenario.limits` and top-level `resources` usage:
+`attempt_slots`, `exchanges`, `retained_bytes`, `elapsed_ns`, and nullable
+`exhausted`. Reduction usage includes candidates, not just the baseline.
+JSON durations are nanoseconds. Strict JSON consumers need the updated
+pre-launch schema for these fields and evidence markers.
+
+JSON and verbose text are checked against a conservative estimate before full
+encoding/rendering. The estimate allows worst-case string escaping and field/
+indentation overhead, so it can reject output that would fit after encoding.
+JSON encoding no longer adds a second full output buffer. Compact text has a
+streaming byte guard. A text result may be partial if that guard trips; the CLI
+reports the write error and exits 2. The initial text preamble is outside the
+main report budget and remains bounded by configuration size.
+
+If a JSON report exceeds its budget, the CLI emits a small error envelope instead
+of an invalid partial JSON document. This diagnostic envelope is outside the
+configured full-report budget, so even a one-byte budget can explain its failure.
+It notes previously demonstrated violations when present, but omits full run
+evidence. No report is spilled to local files. Choose a larger budget within the
+ceiling or compact text when the detailed report is too large.
+
+The deadline covers execution, not report writing. Cleanup and supplied clients
+must cooperate with context cancellation; ConcurTest cannot forcibly terminate
+a context-ignoring custom transport, blocked writer, or target work already
+accepted. Transient HTTP read buffers, transport state, Go allocation overhead,
+and caller-owned inputs are outside retained-byte accounting. These bounds
+reduce resource risk without promising an exact process-memory ceiling or
+rollback of target effects.
+
 ## Failure reduction
 
 Enable reduction with `execution.reduce: true`. Reduction requires setup,

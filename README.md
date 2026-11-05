@@ -206,6 +206,12 @@ an application-defined terminal signal before resetting or observing state.
 Unverified waits stop further trials and reduction candidates. See
 [bounded waits](docs/scenarios.md#wait-for-readiness-and-deferred-effects).
 
+Execution also has [resource limits](docs/scenarios.md#execution-limits): bounded
+attempts/workers, cumulative work and evidence, a shared deadline, and report
+size limits. They cover the baseline and all reduction candidates together.
+Exhaustion stops new work and returns exit 2 with partial evidence; earlier
+demonstrated violations remain recorded.
+
 ## Examples — Regression and Juice Shop
 
 | Example | Scenarios | Preparation |

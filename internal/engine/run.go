@@ -60,6 +60,7 @@ type PreconditionExecution struct {
 // engine: ordered setup, one repeated operation, an optional observation, and
 // one invariant or flat conjunction of existing checks.
 type Scenario struct {
+	Limits       Limits
 	Readiness    *WaitCondition
 	Setup        []SetupStep
 	Precondition *Precondition
@@ -87,6 +88,7 @@ func (s Scenario) EffectiveOutcomes() OutcomePolicy {
 // RunResult records each attempted setup step and later scenario stages.
 // Pointer fields are nil when their stage was optional or was not reached.
 type RunResult struct {
+	Resources    *ResourceUsage
 	StartedAt    time.Time
 	CompletedAt  time.Time
 	Readiness    *WaitResult
@@ -117,16 +119,35 @@ func Run(
 	client *http.Client,
 	scenario Scenario,
 ) (result RunResult, runErr error) {
+	execution, err := NewExecution(ctx, scenario.Limits)
+	if err != nil {
+		return result, err
+	}
+	defer execution.Close()
+	return execution.run(client, scenario)
+}
+
+func (e *Execution) run(client *http.Client, scenario Scenario) (result RunResult, runErr error) {
+	ctx := e.ctx
 	result.StartedAt = time.Now()
 	defer func() {
 		result.CompletedAt = time.Now()
+		result.Resources = e.Snapshot()
+		if failure.CodeOf(e.cause()) == failure.CodeResourceLimit {
+			if result.Evaluation != nil && result.Evaluation.Violated {
+				result.Outcome = RunOutcomeViolated
+			} else if runErr == nil {
+				result.Outcome = RunOutcomeInconclusive
+			}
+			runErr = failure.Join(failure.CodeResourceLimit, "execution budget exhausted", e.cause(), runErr)
+		}
 	}()
 
 	if err := validateRunInput(ctx, client, scenario); err != nil {
 		return result, err
 	}
 	if scenario.Readiness != nil {
-		wait := waitForCondition(ctx, client, *scenario.Readiness, "readiness")
+		wait := e.waitForCondition(ctx, client, *scenario.Readiness, "readiness")
 		result.Readiness = &wait
 		if wait.Err != nil {
 			return result, wait.Err
@@ -139,7 +160,7 @@ func Run(
 		if err := ctx.Err(); err != nil {
 			return result, failure.Wrap(failure.CodeSetupFailed, "prepare scenario", err)
 		}
-		setup := ExecuteHTTP(ctx, client, step.Request)
+		setup := e.executeHTTP(ctx, client, step.Request)
 		result.Setup = append(result.Setup, SetupExecution{Name: step.Name, Execution: setup})
 		label := fmt.Sprintf("setup step %d", index+1)
 		if step.Name != "" {
@@ -163,7 +184,7 @@ func Run(
 		if err := ctx.Err(); err != nil {
 			return result, failure.Wrap(failure.CodePreconditionFailed, "check initial state", err)
 		}
-		execution := ExecuteHTTP(ctx, client, definition.Request)
+		execution := e.executeHTTP(ctx, client, definition.Request)
 		result.Precondition = &PreconditionExecution{Execution: execution}
 		if err := requireSuccessfulStage("precondition", execution); err != nil {
 			return result, failure.Wrap(failure.CodePreconditionFailed, "check initial state", err)
@@ -181,14 +202,14 @@ func Run(
 	var conjunctionBaselines []int64
 	if scenario.Invariant.All != nil && scenario.Invariant.HasChange() {
 		var err error
-		conjunctionBaselines, err = captureConjunctionBaselines(ctx, client, scenario, &result)
+		conjunctionBaselines, err = e.captureConjunctionBaselines(ctx, client, scenario, &result)
 		if err != nil {
 			return result, err
 		}
 	}
 	var baseline *int64
 	if definition := scenario.Invariant.JSONInteger; definition != nil && definition.Change != nil {
-		observation := ExecuteHTTP(ctx, client, *scenario.Observation)
+		observation := e.executeHTTP(ctx, client, *scenario.Observation)
 		result.BaselineObservation = &observation
 		if err := requireSuccessfulStage("baseline observation", observation); err != nil {
 			return result, err
@@ -203,7 +224,7 @@ func Run(
 		baseline = &value
 	}
 
-	history, err := ExecuteConcurrent(
+	history, err := e.executeConcurrent(
 		ctx,
 		client,
 		scenario.Operation,
@@ -219,6 +240,21 @@ func Run(
 		result.Outcomes = &outcomes
 	}
 	if err != nil {
+		if failure.CodeOf(e.cause()) == failure.CodeResourceLimit {
+			if scenario.Invariant.All != nil {
+				result.Evaluation = evaluateConjunctionHistory(scenario.Invariant, history)
+			}
+			if scenario.Invariant.MaximumSuccessfulAttempts != nil {
+				value, evalErr := EvaluateMaximumSuccessfulAttempts(*scenario.Invariant.MaximumSuccessfulAttempts, history)
+				if evalErr != nil {
+					return result, failure.Join(failure.CodeOperationBatchFailed, "evaluate partial operation evidence", err, evalErr)
+				}
+				result.Evaluation = &InvariantEvaluation{MaximumSuccessfulAttempts: &value, Violated: value.Violated}
+			}
+			if result.Evaluation != nil && result.Evaluation.Violated {
+				result.Outcome = RunOutcomeViolated
+			}
+		}
 		return result, failure.Wrap(failure.CodeOperationBatchFailed, "execute scenario operations", err)
 	}
 
@@ -239,7 +275,7 @@ func Run(
 		result.Evaluation = evaluateConjunctionHistory(scenario.Invariant, history)
 	}
 	if scenario.Completion != nil {
-		wait := waitForCondition(ctx, client, *scenario.Completion, "completion")
+		wait := e.waitForCondition(ctx, client, *scenario.Completion, "completion")
 		result.Completion = &wait
 		if wait.Err != nil {
 			// A response-count violation is already demonstrated independently
@@ -251,7 +287,7 @@ func Run(
 		}
 	}
 	if scenario.Invariant.All != nil {
-		if err := evaluateConjunctionObservation(ctx, client, scenario, conjunctionBaselines, &result); err != nil {
+		if err := e.evaluateConjunctionObservation(ctx, client, scenario, conjunctionBaselines, &result); err != nil {
 			if result.Evaluation.Violated && ctx.Err() == nil {
 				result.Outcome = RunOutcomeViolated
 			}
@@ -259,7 +295,7 @@ func Run(
 		}
 	} else if scenario.Invariant.MaximumSuccessfulAttempts != nil {
 		if scenario.Observation != nil {
-			observation := ExecuteHTTP(ctx, client, *scenario.Observation)
+			observation := e.executeHTTP(ctx, client, *scenario.Observation)
 			result.Observation = &observation
 			if observationErr := requireSuccessfulStage("observation", observation); observationErr != nil {
 				if ctx.Err() != nil {
@@ -271,7 +307,7 @@ func Run(
 			}
 		}
 	} else {
-		observation := ExecuteHTTP(ctx, client, *scenario.Observation)
+		observation := e.executeHTTP(ctx, client, *scenario.Observation)
 		result.Observation = &observation
 		if err := requireSuccessfulStage("observation", observation); err != nil {
 			return result, err
@@ -309,6 +345,9 @@ func Run(
 }
 
 func validateRunInput(ctx context.Context, client *http.Client, scenario Scenario) error {
+	if err := scenario.Limits.ValidateWork(scenario.Attempts, scenario.Concurrency); err != nil {
+		return failure.Wrap(failure.CodeInvalidExecution, "validate execution limits", err)
+	}
 	if len(scenario.Setup) > MaxSetupSteps {
 		return failure.New(failure.CodeInvalidExecution, fmt.Sprintf("setup must contain at most %d steps", MaxSetupSteps))
 	}

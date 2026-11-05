@@ -70,7 +70,7 @@ type WaitResult struct {
 // waitForCondition belongs to the run goroutine. Each response is closed before
 // evaluating it or waiting. The child context bounds both HTTP execution and
 // intervals; timers are stopped on every path and no polling goroutine is added.
-func waitForCondition(ctx context.Context, client *http.Client, condition WaitCondition, stage string) (result WaitResult) {
+func (e *Execution) waitForCondition(ctx context.Context, client *http.Client, condition WaitCondition, stage string) (result WaitResult) {
 	condition.Request = cloneHTTPRequest(condition.Request)
 	condition.Assertion = cloneResponseAssertion(condition.Assertion)
 	result.Condition = condition
@@ -92,7 +92,7 @@ func waitForCondition(ctx context.Context, client *http.Client, condition WaitCo
 			fail(err)
 			return result
 		}
-		execution := ExecuteHTTP(waitCtx, client, condition.Request)
+		execution := e.executeHTTP(waitCtx, client, condition.Request)
 		poll := WaitPoll{Execution: execution}
 		err := requireSuccessfulStage(stage, execution)
 		if err == nil && execution.Response.BodyTruncated {

@@ -49,21 +49,44 @@ func ExecuteConcurrent(
 	attempts int,
 	concurrency int,
 ) (History, error) {
+	execution, err := NewExecution(ctx, Limits{})
+	if err != nil {
+		return History{}, err
+	}
+	defer execution.Close()
+	return execution.executeConcurrent(execution.ctx, client, operation, attempts, concurrency)
+}
+
+func (e *Execution) executeConcurrent(ctx context.Context, client *http.Client, operation Operation, attempts, concurrency int) (History, error) {
 	if err := validateConcurrentInput(ctx, client, operation, attempts, concurrency); err != nil {
 		return History{}, err
 	}
-
+	if err := e.limits.ValidateWork(attempts, concurrency); err != nil {
+		return History{}, failure.Wrap(failure.CodeInvalidExecution, "validate execution limits", err)
+	}
+	if err := e.claim(&e.slots, int64(attempts), e.limits.MaxTotalAttempts, "max_total_attempts"); err != nil {
+		return History{}, err
+	}
+	if len(operation.Request.Body) > MaxHTTPBodyBytes {
+		return History{}, e.fail("max_request_body_bytes", MaxHTTPBodyBytes)
+	}
+	headers := headerBytes(operation.Request.Header)
+	if headers > MaxHTTPHeaderBytes {
+		return History{}, e.fail("max_header_bytes", MaxHTTPHeaderBytes)
+	}
+	if err := e.claim(&e.retained, int64(len(operation.Request.Body))+headers, e.limits.MaxRetainedBytes, "max_retained_bytes"); err != nil {
+		return History{}, err
+	}
 	operation.Request = cloneHTTPRequest(operation.Request)
+
 	history := History{Attempts: make([]Attempt, attempts)}
-	jobs := make(chan int, attempts)
+	jobs := make(chan int, concurrency)
 	for index := range history.Attempts {
 		history.Attempts[index] = Attempt{
 			ID:            index + 1,
 			OperationName: operation.Name,
 		}
-		jobs <- index
 	}
-	close(jobs)
 
 	start := make(chan struct{})
 	var ready sync.WaitGroup
@@ -98,7 +121,7 @@ func ExecuteConcurrent(
 						return
 					}
 
-					execution := ExecuteHTTP(ctx, client, operation.Request)
+					execution := e.executeHTTP(ctx, client, operation.Request)
 					history.Attempts[index].Execution = &execution
 				}
 			}
@@ -108,11 +131,22 @@ func ExecuteConcurrent(
 	ready.Wait()
 	history.StartedAt = time.Now()
 	close(start)
+	// The caller owns job production and closure. Only workers execute HTTP;
+	// the queue holds at most one worker group's indexes, not every attempt.
+enqueue:
+	for index := range history.Attempts {
+		select {
+		case <-ctx.Done():
+			break enqueue
+		case jobs <- index:
+		}
+	}
+	close(jobs)
 	workers.Wait()
 	history.CompletedAt = time.Now()
 
 	if err := ctx.Err(); err != nil {
-		return history, failure.Wrap(failure.CodeOperationBatchFailed, "execute concurrent operation", err)
+		return history, failure.Wrap(failure.CodeOperationBatchFailed, "execute concurrent operation", e.cause())
 	}
 	return history, nil
 }

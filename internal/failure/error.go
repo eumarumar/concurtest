@@ -16,6 +16,7 @@ const (
 	CodeScenarioFileFailed        Code = "scenario_file_failed"
 	CodeScenarioInvalid           Code = "scenario_invalid"
 	CodeInvalidExecution          Code = "invalid_execution"
+	CodeResourceLimit             Code = "resource_limit"
 	CodeRequestCreateFailed       Code = "request_create_failed"
 	CodeRequestSendFailed         Code = "request_send_failed"
 	CodeRequestRetried            Code = "request_retried"
