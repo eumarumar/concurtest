@@ -39,10 +39,11 @@ func TestReportsReproduceEffectiveExecution(t *testing.T) {
 				selected := completedTextInput(engine.RunOutcomeViolated, -1).Result
 				input.Reduction = &reduction.Result{
 					Baseline: input.Result, Status: reduction.StatusReduced,
-					Selected: reduction.Candidate{Attempts: 2, Concurrency: 2}, SelectedTrials: &selected,
+					FailureDirection: reduction.FailureBelow,
+					Selected:         reduction.Candidate{Attempts: 2, Concurrency: 2}, SelectedTrials: &selected,
 					Candidates: []reduction.CandidateResult{{
 						Candidate: reduction.Candidate{Attempts: 2, Concurrency: 2},
-						Accepted:  true, Trials: &selected,
+						Accepted:  true, OutcomeRequirementsMet: true, ChecksComplete: true, MatchingViolations: 1, Trials: &selected,
 					}},
 				}
 			}

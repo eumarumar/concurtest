@@ -168,18 +168,49 @@ Use disposable local targets; the requests change application state.
 
 ## Supported invariants
 
-Each scenario declares one invariant:
+Each scenario declares one check or a flat `invariant.all` group of 2–10 named
+checks that must all hold:
 
 | Check | YAML fields |
 | --- | --- |
 | Inclusive integer bounds | `json_integer_path` with `minimum`, `maximum`, or both |
 | Exact integer value | `json_integer_path` with `equals` |
 | Change from the trial's baseline | `json_integer_path` with `change` |
-| Maximum successful operation responses | `maximum_successful_attempts`, optional `successful_status_codes` |
+| Maximum matching HTTP response count | `maximum_successful_attempts`, optional `successful_status_codes` |
 
 Integer checks require an observation request. History checks count qualifying
-HTTP responses; success defaults to any 2xx status. See the
-[scenario reference](docs/scenarios.md) for syntax and evaluation rules.
+HTTP responses; matching defaults to any 2xx status. Replayed responses count
+separately, even when they represent one stored effect. The
+[replay control](docs/scenarios.md#idempotent-replay-control) uses an observation
+of the per-key count to check stored effects. The [scenario reference](docs/scenarios.md)
+covers syntax and evaluation rules.
+
+Use a [group of checks](docs/scenarios.md#check-related-properties-together) to
+check balance bounds and ledger reconciliation against the same history and
+observation. Reports retain each result; any demonstrated violation keeps the
+failure verdict, and an unreadable check prevents a clean pass.
+
+A clean pass also requires usable operation responses in each trial. The default
+requires at least one accepted response and no unexpected or unknown outcomes.
+Declare expected rejections with `outcomes.rejected_status_codes`; use
+`outcomes.minimum_accepted_attempts: 0` for intentional rejection-only tests.
+See [operation outcomes](docs/scenarios.md#operation-outcomes-and-useful-work)
+for acceptance filters and limitations.
+
+Verify resets with optional setup response assertions and an initial-state
+`precondition`. A failed declared check stops the trial before operations and is
+reported as an invalid precondition. See [preparation checks](docs/scenarios.md#verify-setup-responses-and-initial-state).
+
+For deferred work, optional `readiness` and `completion` conditions can wait for
+an application-defined terminal signal before resetting or observing state.
+Unverified waits stop further trials and reduction candidates. See
+[bounded waits](docs/scenarios.md#wait-for-readiness-and-deferred-effects).
+
+Execution also has [resource limits](docs/scenarios.md#execution-limits): bounded
+attempts/workers, cumulative work and evidence, a shared deadline, and report
+size limits. They cover the baseline and all reduction candidates together.
+Exhaustion stops new work and returns exit 2 with partial evidence; earlier
+demonstrated violations remain recorded.
 
 ## Examples — Regression and Juice Shop
 
@@ -206,8 +237,11 @@ it does not remove side effects from previous trials. See
 
 Set `execution.reduce: true` to search smaller attempt and concurrency settings.
 Reduction requires setup and at least three trials. It runs after a majority
-of trials violate the invariant, with no errored or inconclusive trials.
-The result is the smallest observed failure; smaller failures may still exist.
+of trials violate the unchanged invariant in one direction, with no errored or
+inconclusive trials and usable operation outcomes in every trial. Smaller
+candidates must reproduce that direction in a majority of trials. Matching the
+predicate and direction does not prove the same root cause. The result is the
+smallest observed failure; smaller failures may still exist.
 
 Reports include a reproduction command, for example:
 
@@ -243,12 +277,16 @@ Report format does not change exit codes. The
 
 ## Limitations, license, and contributing
 
-- HTTP/JSON only; one repeated operation and one invariant per scenario.
+- HTTP/JSON only; one repeated operation and up to ten existing named checks
+  per scenario. No expressions or automatic business reconciliation.
 - Requests are static; YAML values do not expand environment variables or capture
   values from earlier responses.
 - Setup controls trial state; automatic rollback and resource isolation are not provided.
-- Net stock changes can hide duplicate effects, and successful HTTP responses
-  alone do not prove business outcomes.
+- Redirects are not followed. Observed automatic HTTP retries prevent a clean
+  pass, but can still cause duplicate effects. See [HTTP transport behavior](docs/scenarios.md#http-requests-retries-and-redirects).
+- Net stock changes can hide duplicate effects, and matching HTTP response counts
+  do not establish logical effect counts. Idempotent replays may repeat the same
+  successful response; matching response IDs alone cannot verify stored effects.
 
 Licensed under [Apache 2.0](LICENSE). For contributions, read the
 [architecture](docs/architecture.md), keep changes focused, and run:

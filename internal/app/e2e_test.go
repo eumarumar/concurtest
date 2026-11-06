@@ -132,10 +132,10 @@ func TestVulnerableInventoryHistoryEndToEnd(t *testing.T) {
 		"Concurrency     2",
 		"Violations      10/10 trials",
 		"Evidence\n  Smallest observed failure · Trial 1",
-		"Expected        At most 1 successful attempt",
-		"Success statuses HTTP 201 Created",
-		"Observed        2 successful attempts",
-		"Successful       #",
+		"Expected        At most 1 matching HTTP response",
+		"Match statuses  HTTP 201 Created",
+		"Observed        2 matching HTTP responses",
+		"Matching        #",
 		"Beyond maximum   #",
 		`Response        "{\"accepted\":true}\n"`,
 		"concurtest run --attempts 2 --concurrency 2 --no-reduce "+scenarioPath,
@@ -143,8 +143,8 @@ func TestVulnerableInventoryHistoryEndToEnd(t *testing.T) {
 	if count := strings.Count(report, "Beyond maximum   #"); count != 1 {
 		t.Errorf("over-limit evidence fields = %d, want one invariant summary\n%s", count, report)
 	}
-	if count := strings.Count(report, "HTTP 201 Created"); count != 3 {
-		t.Errorf("successful purchase statuses = %d, want one invariant status line and one compact selected trial\n%s", count, report)
+	if count := strings.Count(report, "HTTP 201 Created"); count != 4 {
+		t.Errorf("successful purchase statuses = %d, want invariant and outcome policy status lines and one compact selected trial\n%s", count, report)
 	}
 	if strings.Contains(report, "Trial 10 · VIOLATED") {
 		t.Fatalf("default report expanded every equivalent trial:\n%s", report)

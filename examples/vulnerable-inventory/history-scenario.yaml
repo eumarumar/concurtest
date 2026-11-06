@@ -9,6 +9,15 @@ setup:
   method: POST
   path: /reset
 
+precondition:
+  request:
+    method: GET
+    path: /state
+  assert:
+    name: stock must start at one
+    json_integer_path: [stock]
+    equals: 1
+
 operation:
   name: purchase
   method: POST
@@ -19,6 +28,9 @@ execution:
   concurrency: 4
   trials: 10
   reduce: true
+
+outcomes:
+  rejected_status_codes: [409]
 
 invariant:
   name: accepted purchases must not exceed stock

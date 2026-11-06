@@ -12,10 +12,11 @@ import (
 	"strings"
 )
 
-// Invariant contains exactly one concrete invariant definition.
+// Invariant contains one concrete check or a flat conjunction of named checks.
 type Invariant struct {
 	JSONInteger               *JSONIntegerInvariant
 	MaximumSuccessfulAttempts *MaximumSuccessfulAttemptsInvariant
+	All                       []Invariant
 }
 
 // JSONIntegerInvariant constrains the JSON integer at one path. Bounds are
@@ -43,17 +44,20 @@ type JSONIntegerEvaluation struct {
 	Violated bool
 }
 
-// MaximumSuccessfulAttemptsInvariant limits operation responses whose HTTP
-// status qualifies as successful. A nil SuccessfulStatusCodes slice means any
-// 2xx response; an explicit list matches only those exact status codes.
+// MaximumSuccessfulAttemptsInvariant limits matching HTTP response counts.
+// A nil SuccessfulStatusCodes slice matches any 2xx response; an explicit list
+// matches only those exact status codes, including non-2xx if configured. Each
+// matching attempt counts separately, including idempotent replays with the same
+// response ID or body. This does not count or verify logical business effects.
 type MaximumSuccessfulAttemptsInvariant struct {
 	Name                  string
 	Maximum               int
 	SuccessfulStatusCodes []int
 }
 
-// MaximumSuccessfulAttemptsEvaluation records the stable IDs of every
-// qualifying attempt and the suffix beyond the configured maximum.
+// MaximumSuccessfulAttemptsEvaluation records the stable attempt IDs of every
+// matching HTTP response and the suffix beyond the configured maximum. These
+// IDs identify client attempts, not application operation IDs or stored effects.
 type MaximumSuccessfulAttemptsEvaluation struct {
 	Invariant            MaximumSuccessfulAttemptsInvariant
 	SuccessfulAttemptIDs []int
@@ -61,11 +65,78 @@ type MaximumSuccessfulAttemptsEvaluation struct {
 	Violated             bool
 }
 
-// InvariantEvaluation contains exactly one concrete evaluation.
+// InvariantEvaluation contains a concrete evaluation or ordered conjunction
+// members. Violated remains true if any evaluated member demonstrates failure.
 type InvariantEvaluation struct {
 	JSONInteger               *JSONIntegerEvaluation
 	MaximumSuccessfulAttempts *MaximumSuccessfulAttemptsEvaluation
+	All                       []CheckEvaluation
 	Violated                  bool
+}
+
+// CheckEvaluation retains a named conjunction member even if it cannot be
+// evaluated. A nil Evaluation with nil Err means the stage was not reached.
+type CheckEvaluation struct {
+	Name       string
+	Evaluation *InvariantEvaluation
+	Err        error
+}
+
+// MaxInvariantChecks bounds a flat conjunction; nested groups are unsupported.
+const MaxInvariantChecks = 10
+
+// Name returns a concrete member's name; a conjunction has no group name.
+func (i Invariant) Name() string {
+	if i.JSONInteger != nil {
+		return i.JSONInteger.Name
+	}
+	if i.MaximumSuccessfulAttempts != nil {
+		return i.MaximumSuccessfulAttempts.Name
+	}
+	return ""
+}
+
+// RequiresObservation reports whether any declared check reads final state.
+func (i Invariant) RequiresObservation() bool {
+	if i.JSONInteger != nil {
+		return true
+	}
+	for _, check := range i.All {
+		if check.JSONInteger != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// HasChange reports whether any member requires a pre-operation observation.
+func (i Invariant) HasChange() bool {
+	if i.JSONInteger != nil {
+		return i.JSONInteger.Change != nil
+	}
+	for _, check := range i.All {
+		if check.JSONInteger != nil && check.JSONInteger.Change != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// Validate checks definitions before any target traffic.
+func (i Invariant) Validate() error { return validateInvariant(i) }
+
+// Complete excludes unreadable or unattempted checks from clean passes and
+// reduction eligibility, even when another member demonstrates a violation.
+func (e InvariantEvaluation) Complete() bool {
+	if e.All != nil {
+		for _, check := range e.All {
+			if check.Err != nil || check.Evaluation == nil || !check.Evaluation.Complete() {
+				return false
+			}
+		}
+		return len(e.All) >= 2
+	}
+	return e.JSONInteger != nil || e.MaximumSuccessfulAttempts != nil
 }
 
 // EvaluateJSONInteger evaluates an invariant against one JSON document.
@@ -120,42 +191,49 @@ func evaluateJSONInteger(invariant JSONIntegerInvariant, document []byte, baseli
 // readJSONInteger preserves exact values and is shared by baseline capture and
 // final evaluation. A malformed baseline must stop the run before operations.
 func readJSONInteger(segments []string, document []byte) (int64, error) {
-	decoder := json.NewDecoder(bytes.NewReader(document))
-	var rawValue json.RawMessage
-	if err := decoder.Decode(&rawValue); err != nil {
-		return 0, fmt.Errorf("decode observation as JSON: %w", err)
+	rawValue, err := readJSONAtPath(segments, document)
+	if err != nil {
+		return 0, err
 	}
-
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return 0, errors.New("decode observation as JSON: multiple JSON values")
-		}
-		return 0, fmt.Errorf("decode trailing observation data: %w", err)
-	}
-
 	path := formatJSONPath(segments)
-	for index, segment := range segments {
-		var err error
-		rawValue, err = jsonPathChild(rawValue, segment, formatJSONPath(segments[:index]))
-		if err != nil {
-			return 0, err
-		}
-	}
-
 	var observed *int64
 	if err := json.Unmarshal(rawValue, &observed); err != nil {
 		return 0, fmt.Errorf(
-			"observation path %s must contain a JSON integer representable as int64: %w",
-			path,
-			err,
+			"observation path %s must contain a JSON integer representable as int64: %w", path, err,
 		)
 	}
 	if observed == nil {
 		return 0, fmt.Errorf("observation path %s must contain an integer, not null", path)
 	}
-
 	return *observed, nil
+}
+
+// readJSONAtPath shares document validation and exact traversal between integer
+// invariants and preparation assertions without decoding numbers as float64.
+func readJSONAtPath(segments []string, document []byte) (json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(document))
+	var rawValue json.RawMessage
+	if err := decoder.Decode(&rawValue); err != nil {
+		return nil, fmt.Errorf("decode observation as JSON: %w", err)
+	}
+
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, errors.New("decode observation as JSON: multiple JSON values")
+		}
+		return nil, fmt.Errorf("decode trailing observation data: %w", err)
+	}
+
+	for index, segment := range segments {
+		var err error
+		rawValue, err = jsonPathChild(rawValue, segment, formatJSONPath(segments[:index]))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return rawValue, nil
 }
 
 // jsonPathChild interprets each segment using the observed container type.
@@ -254,6 +332,26 @@ func validateJSONIntegerInvariant(invariant JSONIntegerInvariant) error {
 
 func validateInvariant(invariant Invariant) error {
 	definitions := 0
+	if invariant.All != nil {
+		definitions++
+		if len(invariant.All) < 2 || len(invariant.All) > MaxInvariantChecks {
+			return fmt.Errorf("all must contain between 2 and %d checks", MaxInvariantChecks)
+		}
+		names := make(map[string]bool, len(invariant.All))
+		for index, check := range invariant.All {
+			if check.All != nil {
+				return errors.New("nested all groups are not supported")
+			}
+			if err := validateInvariant(check); err != nil {
+				return fmt.Errorf("check %d: %w", index+1, err)
+			}
+			name := strings.TrimSpace(check.Name())
+			if names[name] {
+				return fmt.Errorf("all repeats check name %q", name)
+			}
+			names[name] = true
+		}
+	}
 	if invariant.JSONInteger != nil {
 		definitions++
 		if err := validateJSONIntegerInvariant(*invariant.JSONInteger); err != nil {

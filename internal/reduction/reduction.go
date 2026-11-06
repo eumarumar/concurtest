@@ -29,6 +29,9 @@ const (
 	// StatusLimited means the candidate limit was reached before the search
 	// space was exhausted.
 	StatusLimited Status = "limited"
+	// StatusStopped means readiness/completion was not verified, so no later
+	// trial or candidate may reset potentially unsettled target state.
+	StatusStopped Status = "stopped"
 )
 
 // Candidate identifies one attempt and concurrency combination.
@@ -57,16 +60,21 @@ func (s TrialSummary) Duration() time.Duration {
 // CandidateResult records one candidate evaluation. Trials is retained only
 // for the selected candidate or an interrupted active candidate.
 type CandidateResult struct {
-	Candidate Candidate
-	Summary   TrialSummary
-	Accepted  bool
-	Trials    *engine.TrialsResult
-	Err       error
+	Candidate              Candidate
+	Summary                TrialSummary
+	Accepted               bool
+	OutcomeRequirementsMet bool
+	ChecksComplete         bool
+	// MatchingViolations counts trials violating in the baseline's direction.
+	MatchingViolations int
+	Trials             *engine.TrialsResult
+	Err                error
 }
 
 // Result records the baseline, ordered candidate summaries, and any selected
 // observed reproduction.
 type Result struct {
+	Resources      *engine.ResourceUsage
 	StartedAt      time.Time
 	CompletedAt    time.Time
 	Baseline       engine.TrialsResult
@@ -74,6 +82,10 @@ type Result struct {
 	Selected       Candidate
 	SelectedTrials *engine.TrialsResult
 	Status         Status
+	// FailureDirection is empty when no clean baseline majority was selected.
+	FailureDirection FailureDirection
+	// FailureCheck identifies a conjunction member; empty for a single invariant.
+	FailureCheck string
 }
 
 // Duration reports the elapsed reduction time, including the baseline.
@@ -83,8 +95,9 @@ func (r Result) Duration() time.Duration {
 
 // Reduce runs a baseline and then evaluates up to MaxCandidates smaller
 // attempt/concurrency pairs in deterministic order. A candidate is accepted
-// only when a strict majority of its trials violate and none are inconclusive
-// or errored.
+// only when a strict majority of its trials violate the unchanged invariant in
+// the baseline's majority direction, all outcome requirements are met, and none
+// are inconclusive or errored. This does not establish the same root cause.
 func Reduce(
 	ctx context.Context,
 	client *http.Client,
@@ -104,18 +117,33 @@ func reduce(
 	if err := validateInput(scenario, trials); err != nil {
 		return result, err
 	}
+	execution, err := engine.NewExecution(ctx, scenario.Limits)
+	if err != nil {
+		return result, err
+	}
+	defer execution.Close()
 
 	result.StartedAt = time.Now()
 	defer func() {
 		result.CompletedAt = time.Now()
+		result.Resources = execution.Snapshot()
 	}()
 
-	baseline, err := engine.RunTrials(ctx, client, scenario, trials)
+	baseline, err := execution.RunTrials(client, scenario, trials)
 	result.Baseline = baseline
 	if err != nil {
 		return result, failure.Wrap(failure.CodeReductionBaselineFailed, "run reduction baseline", err)
 	}
-	if !qualifies(summarize(baseline)) {
+	if baseline.WaitFailed() {
+		result.Status = StatusStopped
+		return result, nil
+	}
+	if !qualifies(summarize(baseline)) || !outcomesSatisfied(baseline) || !checksComplete(baseline) {
+		result.Status = StatusSkipped
+		return result, nil
+	}
+	result.FailureDirection, result.FailureCheck = majorityFailure(baseline)
+	if result.FailureDirection == "" {
 		result.Status = StatusSkipped
 		return result, nil
 	}
@@ -127,11 +155,14 @@ func reduce(
 		candidateScenario.Attempts = candidate.Attempts
 		candidateScenario.Concurrency = candidate.Concurrency
 
-		trialsResult, candidateErr := engine.RunTrials(ctx, client, candidateScenario, trials)
+		trialsResult, candidateErr := execution.RunTrials(client, candidateScenario, trials)
 		candidateResult := CandidateResult{
-			Candidate: candidate,
-			Summary:   summarize(trialsResult),
-			Err:       candidateErr,
+			Candidate:              candidate,
+			Summary:                summarize(trialsResult),
+			Err:                    candidateErr,
+			OutcomeRequirementsMet: outcomesSatisfied(trialsResult),
+			ChecksComplete:         checksComplete(trialsResult),
+			MatchingViolations:     matchingViolations(trialsResult, result.FailureDirection, result.FailureCheck),
 		}
 		if candidateErr != nil {
 			candidateResult.Trials = &trialsResult
@@ -142,7 +173,17 @@ func reduce(
 				candidateErr,
 			)
 		}
-		if qualifies(candidateResult.Summary) {
+		if trialsResult.WaitFailed() {
+			candidateResult.Trials = &trialsResult
+			if len(trialsResult.Trials) > 0 {
+				candidateResult.Err = trialsResult.Trials[len(trialsResult.Trials)-1].Err
+			}
+			result.Candidates = append(result.Candidates, candidateResult)
+			result.Status = StatusStopped
+			return result, nil
+		}
+		if qualifies(candidateResult.Summary) && candidateResult.OutcomeRequirementsMet && candidateResult.ChecksComplete &&
+			candidateResult.MatchingViolations > trials/2 {
 			candidateResult.Accepted = true
 			candidateResult.Trials = &trialsResult
 			result.Candidates = append(result.Candidates, candidateResult)
@@ -197,7 +238,7 @@ func validateInput(scenario engine.Scenario, trials int) error {
 
 func smallerCandidates(scenario engine.Scenario, limit int) ([]Candidate, bool) {
 	candidates := make([]Candidate, 0, min(limit, MaxCandidates))
-	for attempts := 2; attempts <= scenario.Attempts; attempts++ {
+	for attempts := max(2, scenario.Outcomes.MinimumAccepted()); attempts <= scenario.Attempts; attempts++ {
 		maximumConcurrency := min(attempts, scenario.Concurrency)
 		for concurrency := 2; concurrency <= maximumConcurrency; concurrency++ {
 			if attempts == scenario.Attempts && concurrency == scenario.Concurrency {
@@ -242,4 +283,32 @@ func qualifies(summary TrialSummary) bool {
 		summary.Inconclusive == 0 &&
 		summary.Errored == 0 &&
 		summary.Violated > summary.Requested/2
+}
+
+// A demonstrated violation remains a failing result even when operation
+// coverage is uncertain. Such evidence must not qualify a reduction candidate.
+func outcomesSatisfied(result engine.TrialsResult) bool {
+	if len(result.Trials) == 0 || len(result.Trials) != result.Requested {
+		return false
+	}
+	for _, trial := range result.Trials {
+		if trial.Run.Outcomes == nil || !trial.Run.Outcomes.Trustworthy() {
+			return false
+		}
+	}
+	return true
+}
+
+// A violated trial may also contain an unreadable sibling check. Preserve its
+// failure verdict, but never accept incomplete evidence as a reproduction.
+func checksComplete(result engine.TrialsResult) bool {
+	if len(result.Trials) == 0 || len(result.Trials) != result.Requested {
+		return false
+	}
+	for _, trial := range result.Trials {
+		if trial.Err != nil || trial.Run.Evaluation == nil || !trial.Run.Evaluation.Complete() {
+			return false
+		}
+	}
+	return true
 }

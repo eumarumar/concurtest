@@ -38,6 +38,7 @@ type TrialResult struct {
 
 // TrialsResult records a sequential, ordered sequence of scenario trials.
 type TrialsResult struct {
+	Resources   *ResourceUsage
 	Requested   int
 	Trials      []TrialResult
 	StartedAt   time.Time
@@ -54,12 +55,29 @@ func (r TrialsResult) Duration() time.Duration {
 // from individual trials are retained in the result and do not stop later
 // trials. Parent-context cancellation stops the sequence and is returned as an
 // orchestration error after preserving any active trial's partial evidence.
+// An unverified readiness/completion condition stops the sequence as a retained
+// trial error, because starting another reset could overlap unfinished target work.
 func RunTrials(
 	ctx context.Context,
 	client *http.Client,
 	scenario Scenario,
 	count int,
 ) (result TrialsResult, trialsErr error) {
+	execution, err := NewExecution(ctx, scenario.Limits)
+	if err != nil {
+		return result, err
+	}
+	defer execution.Close()
+	return execution.RunTrials(client, scenario, count)
+}
+
+// RunTrials shares this execution's counters and deadline with earlier trials
+// or reduction candidates. Scenario limits must match the owner's limits.
+func (e *Execution) RunTrials(client *http.Client, scenario Scenario, count int) (result TrialsResult, trialsErr error) {
+	ctx := e.ctx
+	if scenario.Limits.Effective() != e.limits {
+		return result, failure.New(failure.CodeInvalidExecution, "scenario limits differ from execution owner")
+	}
 	if count < 1 || count > MaxTrials {
 		return result, failure.New(failure.CodeInvalidExecution, fmt.Sprintf("validate trial count: must be between 1 and %d: %d", MaxTrials, count))
 	}
@@ -69,6 +87,10 @@ func RunTrials(
 	defer func() {
 		result.CompletedAt = time.Now()
 		result.Status = aggregateTrialStatus(result.Trials)
+		result.Resources = e.Snapshot()
+		if trialsErr != nil && e.cause() != nil {
+			trialsErr = failure.Wrap(failure.CodeTrialSequenceInterrupted, "execution stopped", e.cause())
+		}
 	}()
 	if err := validateRunInput(ctx, client, scenario); err != nil {
 		return result, err
@@ -78,8 +100,7 @@ func RunTrials(
 		if err := ctx.Err(); err != nil {
 			return result, failure.Wrap(failure.CodeTrialSequenceInterrupted, "run trial sequence", err)
 		}
-
-		run, runErr := Run(ctx, client, scenario)
+		run, runErr := e.run(client, scenario)
 		result.Trials = append(result.Trials, TrialResult{
 			Number: number,
 			Status: classifyTrial(run, runErr),
@@ -90,6 +111,9 @@ func RunTrials(
 		if err := ctx.Err(); err != nil {
 			return result, failure.Wrap(failure.CodeTrialSequenceInterrupted, "run trial sequence", err)
 		}
+		if run.WaitFailed() {
+			return result, nil
+		}
 	}
 
 	return result, nil
@@ -97,6 +121,12 @@ func RunTrials(
 
 func classifyTrial(result RunResult, runErr error) TrialStatus {
 	if runErr != nil {
+		// Preserve a demonstrated violation alongside an incomplete wait or
+		// unreadable sibling check. Run sets this outcome deliberately; parent
+		// cancellation remains an orchestration error in RunTrials.
+		if result.Outcome == RunOutcomeViolated && result.Evaluation != nil && result.Evaluation.Violated {
+			return TrialStatusViolated
+		}
 		return TrialStatusErrored
 	}
 	switch result.Outcome {

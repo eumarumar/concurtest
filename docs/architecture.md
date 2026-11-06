@@ -22,7 +22,8 @@ A developer defines:
 ConcurTest executes the operations, records what occurred, evaluates the
 declared invariant from history or observed state, and reports violations.
 
-The selected invariant determines which evaluation path is used:
+Each declared check determines which evidence it evaluates. A conjunction can
+evaluate both history and state against one execution:
 
 ```text
 Scenario
@@ -126,9 +127,63 @@ trial and retains the attempted prefix, including the failure. Cancellation
 stops further steps and trials. Later ordinary trials restart the full setup
 sequence; no rollback or cleanup is implied.
 
+Named setup steps may declare one optional response assertion. A separate optional
+precondition request checks initial state after all setup and before a change
+baseline or operation workers. Both use a named Boolean equality or the existing
+absolute integer bounds/equality semantics. Setup and precondition assertions
+are validated before traffic. They are separate from the post-operation invariant
+or conjunction. Preparation assertions do not accept groups or expressions.
+
+All preparation work belongs to the run goroutine. It completes each exchange,
+closes the body, and evaluates its check before starting another stage. Immediate
+assertions add no polling workers or channels. Existing request contexts and
+client timeouts apply to precondition requests. Exact JSON path
+traversal is shared with integer invariants through RawMessage, avoiding float64
+coercion. Assertion definitions are cloned into evaluation evidence; unknown
+scalar values have nil pointers, distinct from false and zero.
+
+A mismatched or unreadable declared assertion returns `precondition_failed` and
+makes the trial errored before any operation can run. Request failures preserve
+their causes and context identity. The attempted setup prefix and precondition
+exchange remain available, with observed values or an unverified assertion.
+Subsequent ordinary trials and reduction candidates run all checks again through
+the existing scenario runner. A failed check cannot qualify as a demonstrated
+post-operation violation or an eligible reduction candidate. Checks remain opt-in;
+they do not establish complete isolation or application quiescence.
+
+Optional readiness and completion conditions add bounded synchronous polling.
+Readiness runs before setup, protecting resets from known pending work; completion
+runs after operation workers join and before final observation. Change baselines
+remain before operations. Conditions use the existing scalar assertions against
+application-defined completion signals, never the business invariant as a retry
+condition. Only a valid nonmatching scalar causes another poll.
+
+Each wait has an explicit timeout and interval and at most 100 polls. A child
+context covers both HTTP execution and intervals. The run goroutine owns and
+stops interval timers; no polling goroutine or additional worker is introduced.
+Every response closes before another request can begin. All polls retain ordered
+execution and scalar evidence, with response bodies limited to 512 bytes after
+evaluation against the full captured body. Headers and request bodies are omitted
+from retained poll metadata, avoiding repeated large or private inputs.
+
+An unverified readiness/completion boundary stops the trial sequence instead of
+resetting potentially unfinished target work. The failed trial retains the error;
+RunTrials returns the recorded result, as with ordinary non-cancellation trial
+errors, but starts no later trial. Parent-context cancellation remains an
+orchestration error. An already-demonstrated response-count violation retains
+priority even when completion fails; no final state predicate is evaluated from
+an unsettled observation. Reduction similarly stops with no selection, retaining
+any active candidate and preserving the baseline finding. Its `stopped` status
+distinguishes incomplete settlement from a completed unsuccessful search.
+
+These are opt-in application-contract checks, not inferred quiescence. Their
+predicates must include all relevant deferred work. Stable values or a resettable
+pending counter cannot by themselves establish isolation or rule out later writes.
+
 Each trial retains its complete structured run evidence and is classified as
 passed, violated, inconclusive, or errored. Ordinary trial errors are recorded
-and later trials still run. Parent-context cancellation preserves the active
+and later trials still run, except that unverified waits prevent further resets.
+Parent-context cancellation preserves the active
 partial trial, stops new trials from starting, and makes the overall sequence
 incomplete.
 
@@ -143,14 +198,27 @@ traffic. It first requires the configured baseline to demonstrate violations in
 a strict majority of at least three clean trials. Errored or inconclusive
 trials prevent reduction from starting.
 
+The invariant definition stays fixed while attempts and concurrency vary.
+The baseline must have a strict majority violating in one direction, below or
+above its constraint. Each candidate needs a strict majority matching that
+direction, in addition to usable outcomes in every trial. Equality compares
+the observed integer with the required value; change compares the evaluated
+delta with the required change. Bounds distinguish below-minimum from
+above-maximum; successful-attempt limits fail only above their maximum.
+A split baseline skips reduction without hiding its demonstrated violations.
+Matching the same predicate and direction does not establish the same cause or
+detect external drift that preserves the direction. There is no user-defined
+failure identity or automatic baseline revalidation.
+
 Candidates vary only attempt count and concurrency. They run sequentially in a
 stable attempts-first order, use the baseline trial count, and run all setup
 steps before every trial through the existing complete scenario runner. Candidate
 concurrency starts at two so reduction remains focused on concurrent failures.
 
 The search stops at the first qualifying candidate or after 100 candidates.
-Rejected candidates retain bounded status summaries; the baseline, selected
-candidate, and any interrupted active candidate retain complete evidence.
+Rejected candidates retain bounded status summaries and matching-violation counts;
+the baseline, selected candidate, and any interrupted active candidate retain
+complete evidence.
 Reports call the result the smallest observed failure and do not claim
 mathematical minimality or statistical confidence.
 
@@ -175,12 +243,45 @@ history.
 
 Execution history should be structured data, not only formatted terminal output.
 
-History-aware invariants evaluate recorded operation outcomes directly. The
-initial history invariant limits the number of attempts whose final HTTP status
-matches an explicit list, or the default 2xx range. It retains every qualifying
-attempt ID and the stable suffix beyond the configured maximum. Missing or
-failed executions do not count as successful; they keep a non-violating trial
+History-aware invariants evaluate recorded operation responses directly. The
+initial history invariant measures matching HTTP response counts: attempts whose
+final HTTP status matches an explicit list, or the default 2xx range. It retains
+every qualifying attempt ID and the stable suffix beyond the configured maximum.
+Missing or failed executions do not count as matching; they keep a non-violating trial
 from being reported as a trustworthy pass.
+
+Each matching attempt counts separately, even if an idempotent replay returns
+the same operation ID, body, and status while creating only one stored effect.
+Reports identify this measurement explicitly; the legacy scenario fields
+`maximum_successful_attempts` and `successful_status_codes` keep their names.
+No response deduplication or inference of logical effects is performed. For
+per-key effect checks, the existing JSON integer observer can read an
+application-provided count of committed effects for the tested key. Its meaning
+depends on that observer's contract, initial-state checks, and completion boundary.
+
+Operation outcome policy is a separate check of whether the trial exercised its
+declared HTTP response contract. The default accepts the history invariant's
+explicit status filter, or 2xx otherwise; expects no rejection statuses; and
+requires one accepted response per trial. Scenarios can declare acceptance and
+expected rejection lists and a minimum acceptance count, including an explicit
+zero for rejection-only tests. Status sets must be disjoint and the minimum must
+fit the configured attempt count. Validation happens before setup can send traffic.
+
+A conjunction does not inherit any member's response filter for acceptance:
+multiple filters need not describe the same contract. It keeps the default 2xx
+policy unless the scenario explicitly declares its accepted statuses.
+
+After operation workers join, a synchronous evaluator partitions stable attempt
+IDs into accepted, rejected, unexpected, and unknown outcomes. Missing or failed
+exchanges are unknown even if response headers were captured. HTTP statuses do
+not change transport errors or imply whether effects committed. The policy and
+evaluation are snapshotted into evidence without adding goroutines or shared
+state. Non-violating trials with insufficient coverage become inconclusive;
+demonstrated violations retain precedence. State observation still runs after
+unexpected responses. Reduction additionally requires usable outcomes in every
+baseline and candidate trial, and preserves that decision in candidate summaries.
+The unchanged invariant and its majority failure direction also gate reduction;
+matching causal failure identity remains outside this evidence.
 
 ### Observation
 
@@ -215,14 +316,46 @@ one seat cannot have multiple confirmed owners
 
 Invariant evaluation should be separate from transport execution.
 
-A scenario continues to declare exactly one invariant. The current concrete
-forms are a JSON integer constraint at a configured path and a maximum
-number of successful HTTP attempts. JSON integer constraints support an inclusive
+A scenario declares one concrete invariant or a flat `all` conjunction of 2–10
+uniquely named concrete checks. Nested groups and mixed group/concrete fields
+are rejected before traffic. The concrete forms are a JSON integer constraint
+at a configured path and a maximum matching HTTP response count. Integer
+constraints support an inclusive
 minimum, an inclusive maximum, both bounds, exact equality, or an exact change
 from a baseline. Equality cannot be combined with bounds; change cannot be
 combined with any other constraint. A minimum must not exceed its maximum. The
 concrete forms are represented explicitly rather than through an expression
 language or plugin system.
+
+A conjunction shares the complete operation history and one final observation
+document across members. If any change check is present, one baseline response
+serves every change member before operations. Every baseline path must be valid
+before workers start. No member triggers its own request or worker. The run
+goroutine owns evaluation and reuses the exact integer evaluators, including
+overflow checks. Bounded repeated document traversal favors simple semantics
+over a shared mutable decoding cache.
+
+History members evaluate after workers join and before completion verification.
+State members evaluate after completion against the same captured response.
+Members retain their declared order, name, concrete result, or error. Evaluation
+continues after an unreadable scalar so a valid sibling can still prove failure.
+Any demonstrated violation determines the trial verdict, while errors remain
+available; absent a violation, an unreadable member is an error. A clean pass
+requires all members to evaluate successfully and the outcome policy to hold.
+An unverified completion leaves state members explicitly unattempted and stops
+later trials as before. Parent cancellation remains an orchestration error.
+
+Reduction requires complete, error-free checks in every trial, then selects the
+first declared member with a strict majority in one failure direction. Candidates
+must match that member and direction in a strict majority; unrelated member
+failures cannot substitute. The unchanged definitions preserve member identity
+without introducing user-defined failure signatures. JSON exposes ordered member
+statuses and aggregate `violated`/`complete`. A demonstrated violation can coexist
+with `complete: false` when a sibling is unreadable.
+
+This is a conjunction of existing checks, not an expression system or inferred
+business model. Observers must expose reconciliation facts such as a ledger
+mismatch; a set of weak predicates can still miss business failures.
 
 JSON integer paths traverse objects and arrays. YAML accepts string keys and
 non-negative integer indexes, normalizing indexes to decimal strings in the
@@ -292,6 +425,21 @@ The core model should not depend directly on a particular application framework 
 
 The target application is a black box from ConcurTest's perspective.
 
+Every engine HTTP execution stops at the original response instead of following
+redirects. ExecuteHTTP copies the caller's client to override redirect handling
+without mutating the client shared by workers; it reuses the supplied transport,
+timeout, and cookie jar.
+
+HTTP tracing counts completed request-header writes in a per-execution atomic
+counter. The counter is separate from the returned execution because transport
+callbacks can run on other goroutines. More than one observed write becomes a
+structured `request_retried` execution error, retaining the final response. The
+existing outcome rules then prevent a clean pass, stop failed setup/observation
+stages, and preserve demonstrated invariant violations. No retry scheduler or
+additional goroutine is introduced. This observes implicit retries rather than
+preventing them; buffering, incomplete writes, custom transports without tracing,
+and upstream proxy retries limit what it can establish about actual delivery.
+
 ## Configuration
 
 Human-readable configuration is expected to be YAML.
@@ -353,8 +501,11 @@ inside reduction output; rejected candidates retain summaries, while selected
 or interrupted candidates may retain their complete ordered trials.
 
 Setup definitions and execution evidence use ordered JSON arrays. Definitions
-contain each step's name and safe request metadata; trial evidence contains only
-attempted steps, each with its name and HTTP execution. Empty arrays represent
+contain each step's name, safe request metadata, and nullable assertion definition;
+trial evidence contains only attempted steps, each with its name, HTTP execution,
+and nullable assertion evaluation. The optional precondition has separate definition
+and execution fields, with its check result retained alongside its HTTP exchange.
+Empty arrays represent
 no configured or attempted steps. The legacy single-request YAML form normalizes
 to a step with an empty name. Compact text identifies a failed step by position
 and name; verbose text also shows successful steps and marks unattempted steps.
@@ -381,6 +532,52 @@ Text commands use POSIX shell quoting, remain free of color escapes, and omit
 presentation flags. JSON reproduction arguments retain `--format json`.
 
 ## Performance
+
+### Execution resource ownership
+
+`engine.Execution` owns one normalized `Limits` value, cooperative deadline,
+cancel cause, and mutex-protected cumulative counters. Package-level Run,
+RunTrials, ExecuteConcurrent, and ExecuteHTTP create and close their owner.
+Reduction creates one owner and reuses its RunTrials method for the baseline and
+every candidate. Limits must match the owner's configuration. This keeps budget
+state explicit across packages without globals or context-value control state.
+Close cancels work and stops the timer; Snapshot returns an independent checkpoint.
+
+Per-trial attempt and worker ceilings validate before allocations or preparation.
+Cumulative attempt slots reserve before history allocation; the caller produces
+indexes into a worker-sized queue and closes it. Workers keep exclusive history
+slots and are joined before returning. Admission and byte counters share a mutex;
+cancel callbacks never run while that mutex is held. No budget-monitor goroutine
+or polling worker is introduced. Context timeout causes distinguish the execution
+deadline from an earlier parent deadline.
+
+All HTTP stages use the owner, including waits and shared conjunction observations.
+Requests snapshot before workers start, while each recorded exchange owns its
+captured data. Evidence reservations precede request/header cloning; captured
+bodies are limited, charged, and copied into their retained prefix so a short
+slice cannot keep an oversized backing array alive. Exhaustion cancels admission,
+retains marked partial evidence, and prevents later resets. Complete responses
+received at an external cancellation boundary remain available. Earlier invariant
+violations retain their trial classification, while the incomplete orchestration
+still returns an error. Resource snapshots include all candidate work and do not
+refund discarded candidate evidence.
+
+Count limits bound metadata separately from conservative evidence-byte charges.
+They do not claim to measure process RSS: active read buffers, transport internals,
+allocator overhead, and caller inputs remain outside those charges. Time limits
+are cooperative and do not cancel accepted target effects or bound a blocked
+custom client/close operation. See the scenario reference for defaults and hard
+ceilings, including request body and header caps.
+
+The report model has its own size budget. encoding/json buffers a complete value
+before writing, so wrapping its writer alone cannot prevent an oversized encoding
+allocation. A reflection preflight walks only the closed report structs, bounds
+escaped strings/scalars/indentation conservatively, and recognizes time.Time as
+the model's sole custom JSON marshaler. New report field types must preserve that
+assumption. Oversized JSON/verbose models fail before encoding; the extra full
+JSON output buffer was removed. Compact text uses a streaming guard. JSON budget
+failure yields a small CLI error envelope with exit 2; detailed evidence is not
+silently omitted or written to an artifact file.
 
 ConcurTest should efficiently run many simultaneous network operations, but raw throughput is not the primary product goal.
 

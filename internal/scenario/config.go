@@ -75,15 +75,20 @@ func Decode(reader io.Reader) (definition Definition, decodeErr error) {
 }
 
 type documentConfig struct {
-	Version        strictInt       `yaml:"version"`
-	Name           strictString    `yaml:"name"`
-	Target         strictString    `yaml:"target"`
-	RequestTimeout strictString    `yaml:"request_timeout"`
-	Setup          setupConfig     `yaml:"setup"`
-	Operation      operationConfig `yaml:"operation"`
-	Execution      executionConfig `yaml:"execution"`
-	Observation    *requestConfig  `yaml:"observation"`
-	Invariant      invariantConfig `yaml:"invariant"`
+	Version        strictInt           `yaml:"version"`
+	Name           strictString        `yaml:"name"`
+	Target         strictString        `yaml:"target"`
+	RequestTimeout strictString        `yaml:"request_timeout"`
+	Setup          setupConfig         `yaml:"setup"`
+	Readiness      *waitConfig         `yaml:"readiness"`
+	Completion     *waitConfig         `yaml:"completion"`
+	Precondition   *preconditionConfig `yaml:"precondition"`
+	Operation      operationConfig     `yaml:"operation"`
+	Execution      executionConfig     `yaml:"execution"`
+	Observation    *requestConfig      `yaml:"observation"`
+	Invariant      invariantConfig     `yaml:"invariant"`
+	Outcomes       outcomeConfig       `yaml:"outcomes"`
+	Limits         limitsConfig        `yaml:"limits"`
 }
 
 type requestConfig struct {
@@ -94,8 +99,9 @@ type requestConfig struct {
 }
 
 type setupStepConfig struct {
-	Name    strictString   `yaml:"name"`
-	Request *requestConfig `yaml:"request"`
+	Name      strictString     `yaml:"name"`
+	Request   *requestConfig   `yaml:"request"`
+	Assertion *assertionConfig `yaml:"assert"`
 }
 
 // Both YAML forms become one ordered list. node.Decode does not inherit the
@@ -120,7 +126,7 @@ func (setup *setupConfig) UnmarshalYAML(node *yaml.Node) error {
 	steps := make(setupConfig, len(node.Content))
 	for index, item := range node.Content {
 		label := fmt.Sprintf("setup step %d", index+1)
-		if err := checkMappingFields(item, "name", "request"); err != nil {
+		if err := checkMappingFields(item, "name", "request", "assert"); err != nil {
 			return fmt.Errorf("%s: %w", label, err)
 		}
 		if err := item.Decode(&steps[index]); err != nil {
@@ -203,15 +209,43 @@ type executionConfig struct {
 	Reduce      strictBool `yaml:"reduce"`
 }
 
+type outcomeConfig struct {
+	AcceptedStatusCodes     strictIntList `yaml:"accepted_status_codes"`
+	RejectedStatusCodes     strictIntList `yaml:"rejected_status_codes"`
+	MinimumAcceptedAttempts *strictInt    `yaml:"minimum_accepted_attempts"`
+}
+
+func (config outcomeConfig) policy(attempts int, invariant engine.Invariant) (engine.OutcomePolicy, error) {
+	policy := engine.OutcomePolicy{}
+	if config.AcceptedStatusCodes.configured {
+		policy.AcceptedStatusCodes = make([]int, len(config.AcceptedStatusCodes.values))
+		for i, value := range config.AcceptedStatusCodes.values {
+			policy.AcceptedStatusCodes[i] = int(value)
+		}
+	}
+	if config.RejectedStatusCodes.configured {
+		policy.RejectedStatusCodes = make([]int, len(config.RejectedStatusCodes.values))
+		for i, value := range config.RejectedStatusCodes.values {
+			policy.RejectedStatusCodes[i] = int(value)
+		}
+	}
+	if config.MinimumAcceptedAttempts != nil {
+		policy.MinimumAcceptedAttempts = new(int(*config.MinimumAcceptedAttempts))
+	}
+	policy = (engine.Scenario{Outcomes: policy, Invariant: invariant}).EffectiveOutcomes()
+	return policy, policy.Validate(attempts)
+}
+
 type invariantConfig struct {
-	Name                      strictString   `yaml:"name"`
-	JSONIntegerPath           jsonPathConfig `yaml:"json_integer_path"`
-	Minimum                   *strictInt64   `yaml:"minimum"`
-	Maximum                   *strictInt64   `yaml:"maximum"`
-	Equals                    *strictInt64   `yaml:"equals"`
-	Change                    *strictInt64   `yaml:"change"`
-	MaximumSuccessfulAttempts *strictInt     `yaml:"maximum_successful_attempts"`
-	SuccessfulStatusCodes     strictIntList  `yaml:"successful_status_codes"`
+	All                       []invariantConfig `yaml:"all"`
+	Name                      strictString      `yaml:"name"`
+	JSONIntegerPath           jsonPathConfig    `yaml:"json_integer_path"`
+	Minimum                   *strictInt64      `yaml:"minimum"`
+	Maximum                   *strictInt64      `yaml:"maximum"`
+	Equals                    *strictInt64      `yaml:"equals"`
+	Change                    *strictInt64      `yaml:"change"`
+	MaximumSuccessfulAttempts *strictInt        `yaml:"maximum_successful_attempts"`
+	SuccessfulStatusCodes     strictIntList     `yaml:"successful_status_codes"`
 }
 
 func (config *invariantConfig) UnmarshalYAML(node *yaml.Node) error {
@@ -219,6 +253,7 @@ func (config *invariantConfig) UnmarshalYAML(node *yaml.Node) error {
 		return errors.New("invariant must be a mapping")
 	}
 	known := map[string]struct{}{
+		"all":                         {},
 		"name":                        {},
 		"json_integer_path":           {},
 		"minimum":                     {},
@@ -242,12 +277,30 @@ func (config *invariantConfig) UnmarshalYAML(node *yaml.Node) error {
 			return fmt.Errorf("invariant field %q is repeated", key.Value)
 		}
 		seen[key.Value] = struct{}{}
+		if key.Value == "all" {
+			if value.Kind != yaml.SequenceNode || len(value.Content) < 2 || len(value.Content) > engine.MaxInvariantChecks {
+				return fmt.Errorf("invariant.all must contain between 2 and %d checks", engine.MaxInvariantChecks)
+			}
+			for _, child := range value.Content {
+				if child.Kind != yaml.MappingNode {
+					return errors.New("invariant.all entries must be mappings")
+				}
+				for n := 0; n < len(child.Content); n += 2 {
+					if child.Content[n].Value == "all" {
+						return errors.New("nested all groups are not supported")
+					}
+				}
+			}
+		}
 		if (key.Value == "minimum" || key.Value == "maximum" || key.Value == "equals" || key.Value == "change") && value.Tag == "!!null" {
 			return fmt.Errorf("invariant.%s must be an integer", key.Value)
 		}
 		if key.Value == "successful_status_codes" && value.Tag == "!!null" {
 			return errors.New("invariant.successful_status_codes must be a list of integers")
 		}
+	}
+	if _, grouped := seen["all"]; grouped && len(seen) != 1 {
+		return errors.New("invariant.all cannot be combined with other invariant fields")
 	}
 
 	type plainInvariantConfig invariantConfig
@@ -437,6 +490,13 @@ func (document documentConfig) definition() (Definition, error) {
 			document.Execution.Attempts,
 		)
 	}
+	limits, err := document.Limits.limits()
+	if err != nil {
+		return Definition{}, err
+	}
+	if err := limits.ValidateWork(int(document.Execution.Attempts), int(document.Execution.Concurrency)); err != nil {
+		return Definition{}, err
+	}
 	if document.Execution.Trials < 1 || document.Execution.Trials > engine.MaxTrials {
 		return Definition{}, fmt.Errorf(
 			"execution.trials must be between 1 and %d",
@@ -459,27 +519,67 @@ func (document documentConfig) definition() (Definition, error) {
 	}
 
 	invariantName := strings.TrimSpace(string(document.Invariant.Name))
-	if invariantName == "" {
+	if invariantName == "" && document.Invariant.All == nil {
 		return Definition{}, errors.New("invariant.name must not be empty")
 	}
 	invariant, err := document.Invariant.invariant(invariantName)
 	if err != nil {
 		return Definition{}, err
 	}
-	if invariant.JSONInteger != nil && document.Observation == nil {
+	if invariant.RequiresObservation() && document.Observation == nil {
 		return Definition{}, errors.New("observation is required for a JSON integer invariant")
 	}
 
 	var setup []engine.SetupStep
+	var readiness, completion *engine.WaitCondition
+	if document.Readiness != nil {
+		readiness, err = document.Readiness.condition("readiness", target)
+		if err != nil {
+			return Definition{}, err
+		}
+	}
+	if document.Completion != nil {
+		completion, err = document.Completion.condition("completion", target)
+		if err != nil {
+			return Definition{}, err
+		}
+	}
 	for index, step := range document.Setup {
 		request, err := step.Request.httpRequest(fmt.Sprintf("setup step %d", index+1), target)
 		if err != nil {
 			return Definition{}, err
 		}
-		setup = append(setup, engine.SetupStep{Name: string(step.Name), Request: request})
+		var assertion *engine.ResponseAssertion
+		if step.Assertion != nil {
+			definition, err := step.Assertion.assertion()
+			if err != nil {
+				return Definition{}, fmt.Errorf("setup step %d assertion: %w", index+1, err)
+			}
+			assertion = &definition
+		}
+		setup = append(setup, engine.SetupStep{Name: string(step.Name), Request: request, Assertion: assertion})
+	}
+	var precondition *engine.Precondition
+	if config := document.Precondition; config != nil {
+		if config.Request == nil || config.Assertion == nil {
+			return Definition{}, errors.New("precondition requires request and assert")
+		}
+		request, err := config.Request.httpRequest("precondition", target)
+		if err != nil {
+			return Definition{}, err
+		}
+		assertion, err := config.Assertion.assertion()
+		if err != nil {
+			return Definition{}, fmt.Errorf("precondition assertion: %w", err)
+		}
+		precondition = &engine.Precondition{Request: request, Assertion: assertion}
 	}
 
 	operationRequest, err := document.Operation.request().httpRequest("operation", target)
+	if err != nil {
+		return Definition{}, err
+	}
+	outcomes, err := document.Outcomes.policy(int(document.Execution.Attempts), invariant)
 	if err != nil {
 		return Definition{}, err
 	}
@@ -499,7 +599,11 @@ func (document documentConfig) definition() (Definition, error) {
 		Trials:         int(document.Execution.Trials),
 		Reduce:         bool(document.Execution.Reduce),
 		Scenario: engine.Scenario{
-			Setup: setup,
+			Limits:       limits,
+			Setup:        setup,
+			Readiness:    readiness,
+			Completion:   completion,
+			Precondition: precondition,
 			Operation: engine.Operation{
 				Name:    operationName,
 				Request: operationRequest,
@@ -508,11 +612,30 @@ func (document documentConfig) definition() (Definition, error) {
 			Concurrency: int(document.Execution.Concurrency),
 			Observation: observation,
 			Invariant:   invariant,
+			Outcomes:    outcomes,
 		},
 	}, nil
 }
 
 func (config invariantConfig) invariant(name string) (engine.Invariant, error) {
+	if config.All != nil {
+		if name != "" || config.JSONIntegerPath.configured || config.Minimum != nil || config.Maximum != nil || config.Equals != nil || config.Change != nil || config.MaximumSuccessfulAttempts != nil || config.SuccessfulStatusCodes.configured {
+			return engine.Invariant{}, errors.New("invariant.all cannot be combined with other invariant fields")
+		}
+		group := engine.Invariant{All: make([]engine.Invariant, len(config.All))}
+		for index, member := range config.All {
+			memberName := strings.TrimSpace(string(member.Name))
+			if memberName == "" {
+				return engine.Invariant{}, fmt.Errorf("invariant.all check %d requires a name", index+1)
+			}
+			check, err := member.invariant(memberName)
+			if err != nil {
+				return engine.Invariant{}, fmt.Errorf("invariant.all check %d: %w", index+1, err)
+			}
+			group.All[index] = check
+		}
+		return group, group.Validate()
+	}
 	pathConfigured := config.JSONIntegerPath.configured
 	minimumConfigured := config.Minimum != nil
 	maximumConfigured := config.MaximumSuccessfulAttempts != nil

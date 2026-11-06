@@ -123,6 +123,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		return exitError
 	}
 	transport := defaultTransport.Clone()
+	transport.MaxResponseHeaderBytes = engine.MaxHTTPHeaderBytes
 	defer transport.CloseIdleConnections()
 	client := &http.Client{
 		Transport: transport,
@@ -161,6 +162,13 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		})
 	}
 	if reportErr != nil {
+		if options.format == outputJSON && failure.CodeOf(reportErr) == failure.CodeResourceLimit {
+			if result.Status == engine.TrialStatusViolated {
+				reportErr = failure.Wrap(failure.CodeResourceLimit, "demonstrated invariant violations exist; the full report was omitted", reportErr)
+			}
+			writeEarlyJSONError(stdout, stderr, report.ErrorInput{Err: reportErr})
+			return exitError
+		}
 		writeDiagnostic(stderr, "Could not write the run report: %v", reportErr)
 		return exitError
 	}

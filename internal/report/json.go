@@ -1,7 +1,6 @@
 package report
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -56,8 +55,9 @@ type operationJSON struct {
 }
 
 type setupExecutionJSON struct {
-	Name      string         `json:"name"`
-	Execution *executionJSON `json:"execution"`
+	Name      string                   `json:"name"`
+	Execution *executionJSON           `json:"execution"`
+	Assertion *assertionEvaluationJSON `json:"assertion"`
 }
 
 type executionConfigJSON struct {
@@ -68,15 +68,35 @@ type executionConfigJSON struct {
 }
 
 type scenarioJSON struct {
-	Path             string              `json:"path"`
-	Name             string              `json:"name"`
-	Target           string              `json:"target"`
-	RequestTimeoutNS int64               `json:"request_timeout_ns"`
-	Execution        executionConfigJSON `json:"execution"`
-	Setup            []operationJSON     `json:"setup"`
-	Operation        operationJSON       `json:"operation"`
-	Observation      *requestJSON        `json:"observation"`
-	Invariant        any                 `json:"invariant"`
+	Limits           limitsJSON                  `json:"limits"`
+	Path             string                      `json:"path"`
+	Name             string                      `json:"name"`
+	Target           string                      `json:"target"`
+	RequestTimeoutNS int64                       `json:"request_timeout_ns"`
+	Execution        executionConfigJSON         `json:"execution"`
+	Setup            []setupDefinitionJSON       `json:"setup"`
+	Precondition     *preconditionDefinitionJSON `json:"precondition"`
+	Readiness        *waitDefinitionJSON         `json:"readiness"`
+	Completion       *waitDefinitionJSON         `json:"completion"`
+	Operation        operationJSON               `json:"operation"`
+	Observation      *requestJSON                `json:"observation"`
+	Invariant        any                         `json:"invariant"`
+	Outcomes         outcomePolicyJSON           `json:"outcomes"`
+}
+
+type outcomePolicyJSON struct {
+	AcceptedStatusCodes     []int `json:"accepted_status_codes"`
+	RejectedStatusCodes     []int `json:"rejected_status_codes"`
+	MinimumAcceptedAttempts int   `json:"minimum_accepted_attempts"`
+}
+
+type outcomeEvaluationJSON struct {
+	AcceptedAttemptIDs      []int `json:"accepted_attempt_ids"`
+	RejectedAttemptIDs      []int `json:"rejected_attempt_ids"`
+	UnexpectedAttemptIDs    []int `json:"unexpected_attempt_ids"`
+	UnknownAttemptIDs       []int `json:"unknown_attempt_ids"`
+	MinimumAcceptedAttempts int   `json:"minimum_accepted_attempts"`
+	RequirementsMet         bool  `json:"requirements_met"`
 }
 
 type jsonIntegerDefinitionJSON struct {
@@ -91,9 +111,29 @@ type jsonIntegerDefinitionJSON struct {
 
 type maximumSuccessfulAttemptsDefinitionJSON struct {
 	Type                  string `json:"type"`
+	Measurement           string `json:"measurement"`
 	Name                  string `json:"name"`
 	Maximum               int    `json:"maximum"`
 	SuccessfulStatusCodes []int  `json:"successful_status_codes"`
+}
+
+type allDefinitionJSON struct {
+	Type   string `json:"type"`
+	Checks []any  `json:"checks"`
+}
+
+type checkEvaluationJSON struct {
+	Name       string     `json:"name"`
+	Status     string     `json:"status"`
+	Evaluation any        `json:"evaluation"`
+	Error      *errorJSON `json:"error"`
+}
+
+type allEvaluationJSON struct {
+	Type     string                `json:"type"`
+	Checks   []checkEvaluationJSON `json:"checks"`
+	Violated bool                  `json:"violated"`
+	Complete bool                  `json:"complete"`
 }
 
 type summaryJSON struct {
@@ -115,15 +155,18 @@ type responseExcerptJSON struct {
 }
 
 type responseJSON struct {
-	StatusCode  int                  `json:"status_code"`
-	BodyExcerpt *responseExcerptJSON `json:"body_excerpt"`
+	EvidenceTruncated bool                 `json:"evidence_truncated"`
+	StatusCode        int                  `json:"status_code"`
+	BodyExcerpt       *responseExcerptJSON `json:"body_excerpt"`
 }
 
 type executionJSON struct {
-	Request  requestJSON   `json:"request"`
-	Response *responseJSON `json:"response"`
-	Timing   *timingJSON   `json:"timing"`
-	Error    *errorJSON    `json:"error"`
+	RequestDataTruncated bool          `json:"request_data_truncated"`
+	Request              requestJSON   `json:"request"`
+	Response             *responseJSON `json:"response"`
+	Timing               *timingJSON   `json:"timing"`
+	Error                *errorJSON    `json:"error"`
+	RequestWrites        int64         `json:"request_writes"`
 }
 
 type attemptJSON struct {
@@ -148,19 +191,24 @@ type jsonIntegerEvaluationJSON struct {
 
 type maximumSuccessfulAttemptsEvaluationJSON struct {
 	Type                 string `json:"type"`
+	Measurement          string `json:"measurement"`
 	SuccessfulAttemptIDs []int  `json:"successful_attempt_ids"`
 	OverLimitAttemptIDs  []int  `json:"over_limit_attempt_ids"`
 	Violated             bool   `json:"violated"`
 }
 
 type runEvidenceJSON struct {
-	Outcome             *string              `json:"outcome"`
-	Timing              *timingJSON          `json:"timing"`
-	Setup               []setupExecutionJSON `json:"setup"`
-	BaselineObservation *executionJSON       `json:"baseline_observation"`
-	History             historyJSON          `json:"history"`
-	Observation         *executionJSON       `json:"observation"`
-	InvariantEvaluation any                  `json:"invariant_evaluation"`
+	Outcome             *string                    `json:"outcome"`
+	Timing              *timingJSON                `json:"timing"`
+	Setup               []setupExecutionJSON       `json:"setup"`
+	Precondition        *preconditionExecutionJSON `json:"precondition"`
+	Readiness           *waitExecutionJSON         `json:"readiness"`
+	Completion          *waitExecutionJSON         `json:"completion"`
+	BaselineObservation *executionJSON             `json:"baseline_observation"`
+	History             historyJSON                `json:"history"`
+	Observation         *executionJSON             `json:"observation"`
+	InvariantEvaluation any                        `json:"invariant_evaluation"`
+	OutcomeEvaluation   *outcomeEvaluationJSON     `json:"outcome_evaluation"`
 }
 
 type trialJSON struct {
@@ -177,13 +225,16 @@ type baselineReductionJSON struct {
 }
 
 type candidateReductionJSON struct {
-	Number      int                  `json:"number"`
-	Attempts    int                  `json:"attempts"`
-	Concurrency int                  `json:"concurrency"`
-	Accepted    bool                 `json:"accepted"`
-	Summary     candidateSummaryJSON `json:"summary"`
-	Error       *errorJSON           `json:"error"`
-	Trials      []trialJSON          `json:"trials"`
+	Number                 int                  `json:"number"`
+	Attempts               int                  `json:"attempts"`
+	Concurrency            int                  `json:"concurrency"`
+	Accepted               bool                 `json:"accepted"`
+	OutcomeRequirementsMet bool                 `json:"outcome_requirements_met"`
+	ChecksComplete         bool                 `json:"checks_complete"`
+	MatchingViolations     int                  `json:"matching_violations"`
+	Summary                candidateSummaryJSON `json:"summary"`
+	Error                  *errorJSON           `json:"error"`
+	Trials                 []trialJSON          `json:"trials"`
 }
 
 type candidateSummaryJSON struct {
@@ -204,12 +255,14 @@ type selectionJSON struct {
 }
 
 type reductionJSON struct {
-	Status        string                   `json:"status"`
-	Timing        *timingJSON              `json:"timing"`
-	MaxCandidates int                      `json:"max_candidates"`
-	Baseline      baselineReductionJSON    `json:"baseline"`
-	Candidates    []candidateReductionJSON `json:"candidates"`
-	Selection     *selectionJSON           `json:"selection"`
+	Status           string                      `json:"status"`
+	FailureDirection *reduction.FailureDirection `json:"failure_direction"`
+	FailureCheck     *string                     `json:"failure_check"`
+	Timing           *timingJSON                 `json:"timing"`
+	MaxCandidates    int                         `json:"max_candidates"`
+	Baseline         baselineReductionJSON       `json:"baseline"`
+	Candidates       []candidateReductionJSON    `json:"candidates"`
+	Selection        *selectionJSON              `json:"selection"`
 }
 
 type reproductionJSON struct {
@@ -217,6 +270,7 @@ type reproductionJSON struct {
 }
 
 type runReportJSON struct {
+	Resources     *resourcesJSON   `json:"resources"`
 	SchemaVersion string           `json:"schema_version"`
 	ReportType    string           `json:"report_type"`
 	Status        string           `json:"status"`
@@ -259,10 +313,13 @@ func WriteJSON(writer io.Writer, input Input) error {
 	if err != nil {
 		return failure.Wrap(failure.CodeReportInvalid, "write JSON report", err)
 	}
-	return writeJSONValue(writer, report)
+	return writeJSONValueLimit(writer, report, input.Scenario.Limits.Effective().MaxReportBytes)
 }
 
 func validateJSONInput(input Input) error {
+	if err := input.Scenario.Limits.Validate(); err != nil {
+		return err
+	}
 	if strings.TrimSpace(input.ScenarioPath) == "" {
 		return errors.New("scenario path is empty")
 	}
@@ -332,19 +389,18 @@ func WriteJSONError(writer io.Writer, input ErrorInput) error {
 }
 
 func writeJSONValue(writer io.Writer, value any) error {
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
+	return writeJSONValueLimit(writer, value, (engine.Limits{}).Effective().MaxReportBytes)
+}
+
+func writeJSONValueLimit(writer io.Writer, value any, maximum int64) error {
+	if !reportFits(value, maximum) {
+		return reportLimitError(maximum)
+	}
+	encoder := json.NewEncoder(exactWriter{writer})
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(value); err != nil {
 		return failure.Wrap(failure.CodeReportWriteFailed, "encode JSON report", err)
-	}
-	written, err := writer.Write(buffer.Bytes())
-	if err == nil && written != buffer.Len() {
-		err = io.ErrShortWrite
-	}
-	if err != nil {
-		return failure.Wrap(failure.CodeReportWriteFailed, "write JSON report", err)
 	}
 	return nil
 }
@@ -364,6 +420,7 @@ func newRunReportJSON(input Input) (runReportJSON, error) {
 		ReportType:    "run",
 		Status:        status,
 		Scenario: scenarioJSON{
+			Limits:           configuredLimits(input.Scenario.Limits),
 			Path:             input.ScenarioPath,
 			Name:             input.ScenarioName,
 			Target:           input.Target,
@@ -374,15 +431,24 @@ func newRunReportJSON(input Input) (runReportJSON, error) {
 				Trials:           configuredTrials,
 				ReductionEnabled: reductionEnabled,
 			},
-			Setup: setupRequestsJSON(input.Scenario.Setup),
+			Setup:        setupRequestsJSON(input.Scenario.Setup),
+			Precondition: preconditionDefinition(input.Scenario.Precondition),
+			Readiness:    waitDefinition(input.Scenario.Readiness),
+			Completion:   waitDefinition(input.Scenario.Completion),
 			Operation: operationJSON{
 				Name:    input.Scenario.Operation.Name,
 				Request: requestFromEngine(input.Scenario.Operation.Request),
 			},
 			Observation: configuredRequest(input.Scenario.Observation),
 			Invariant:   invariantDefinition(input.Scenario.Invariant),
+			Outcomes: outcomePolicyJSON{
+				AcceptedStatusCodes:     input.Scenario.EffectiveOutcomes().AcceptedStatusCodes,
+				RejectedStatusCodes:     append([]int{}, input.Scenario.Outcomes.RejectedStatusCodes...),
+				MinimumAcceptedAttempts: input.Scenario.Outcomes.MinimumAccepted(),
+			},
 		},
 		Summary:      resultSummary(input.Result),
+		Resources:    resourceUsageJSON(input),
 		Trials:       trialsJSON(input.Result.Trials),
 		Reduction:    reductionResultJSON(input),
 		Error:        optionalError(input.RunError),
@@ -407,6 +473,13 @@ func runStatus(input Input) (string, error) {
 }
 
 func invariantDefinition(invariant engine.Invariant) any {
+	if invariant.All != nil {
+		checks := make([]any, len(invariant.All))
+		for index, check := range invariant.All {
+			checks[index] = invariantDefinition(check)
+		}
+		return allDefinitionJSON{Type: "all", Checks: checks}
+	}
 	if definition := invariant.JSONInteger; definition != nil {
 		return jsonIntegerDefinitionJSON{
 			Type: "json_integer", Name: definition.Name,
@@ -418,6 +491,7 @@ func invariantDefinition(invariant engine.Invariant) any {
 	if definition := invariant.MaximumSuccessfulAttempts; definition != nil {
 		return maximumSuccessfulAttemptsDefinitionJSON{
 			Type: "maximum_successful_attempts", Name: definition.Name,
+			Measurement:           "matching_http_response_count",
 			Maximum:               definition.Maximum,
 			SuccessfulStatusCodes: append([]int(nil), definition.SuccessfulStatusCodes...),
 		}
@@ -460,17 +534,35 @@ func runResultJSON(result engine.RunResult) runEvidenceJSON {
 		Outcome:             outcome,
 		Timing:              timing(result.StartedAt, result.CompletedAt),
 		Setup:               setupExecutionsJSON(result.Setup),
+		Precondition:        preconditionResult(result.Precondition),
+		Readiness:           waitExecution(result.Readiness),
+		Completion:          waitExecution(result.Completion),
 		BaselineObservation: executionResultJSON(result.BaselineObservation),
 		History:             historyJSON{Timing: timing(result.History.StartedAt, result.History.CompletedAt), Attempts: attempts},
 		Observation:         executionResultJSON(result.Observation),
 		InvariantEvaluation: invariantEvaluation(result.Evaluation),
+		OutcomeEvaluation:   operationOutcomesJSON(result.Outcomes),
 	}
 }
 
-func setupRequestsJSON(steps []engine.SetupStep) []operationJSON {
-	result := make([]operationJSON, len(steps))
+func operationOutcomesJSON(evaluation *engine.OutcomeEvaluation) *outcomeEvaluationJSON {
+	if evaluation == nil {
+		return nil
+	}
+	return &outcomeEvaluationJSON{
+		AcceptedAttemptIDs:      append([]int{}, evaluation.AcceptedAttemptIDs...),
+		RejectedAttemptIDs:      append([]int{}, evaluation.RejectedAttemptIDs...),
+		UnexpectedAttemptIDs:    append([]int{}, evaluation.UnexpectedAttemptIDs...),
+		UnknownAttemptIDs:       append([]int{}, evaluation.UnknownAttemptIDs...),
+		MinimumAcceptedAttempts: evaluation.Policy.MinimumAccepted(),
+		RequirementsMet:         evaluation.Trustworthy(),
+	}
+}
+
+func setupRequestsJSON(steps []engine.SetupStep) []setupDefinitionJSON {
+	result := make([]setupDefinitionJSON, len(steps))
 	for index, step := range steps {
-		result[index] = operationJSON{Name: step.Name, Request: requestFromEngine(step.Request)}
+		result[index] = setupDefinitionJSON{Name: step.Name, Request: requestFromEngine(step.Request), Assertion: assertionDefinition(step.Assertion)}
 	}
 	return result
 }
@@ -478,7 +570,7 @@ func setupRequestsJSON(steps []engine.SetupStep) []operationJSON {
 func setupExecutionsJSON(steps []engine.SetupExecution) []setupExecutionJSON {
 	result := make([]setupExecutionJSON, len(steps))
 	for index, step := range steps {
-		result[index] = setupExecutionJSON{Name: step.Name, Execution: executionResultJSON(&step.Execution)}
+		result[index] = setupExecutionJSON{Name: step.Name, Execution: executionResultJSON(&step.Execution), Assertion: assertionResultJSON(step.Assertion)}
 	}
 	return result
 }
@@ -489,17 +581,19 @@ func executionResultJSON(execution *engine.HTTPExecution) *executionJSON {
 	}
 	var response *responseJSON
 	if execution.Response != nil {
-		response = &responseJSON{StatusCode: execution.Response.StatusCode}
+		response = &responseJSON{StatusCode: execution.Response.StatusCode, EvidenceTruncated: execution.Response.EvidenceTruncated}
 		if len(execution.Response.Body) > 0 || execution.Response.BodyTruncated {
 			excerpt := responseExcerptJSONValue(execution.Response)
 			response.BodyExcerpt = &excerpt
 		}
 	}
 	return &executionJSON{
-		Request:  requestFromEngine(execution.Request),
-		Response: response,
-		Timing:   timing(execution.StartedAt, execution.CompletedAt),
-		Error:    optionalError(execution.Err),
+		RequestDataTruncated: execution.RequestDataTruncated,
+		Request:              requestFromEngine(execution.Request),
+		Response:             response,
+		Timing:               timing(execution.StartedAt, execution.CompletedAt),
+		Error:                optionalError(execution.Err),
+		RequestWrites:        execution.RequestWrites,
 	}
 }
 
@@ -525,6 +619,22 @@ func invariantEvaluation(evaluation *engine.InvariantEvaluation) any {
 	if evaluation == nil {
 		return nil
 	}
+	if evaluation.All != nil {
+		checks := make([]checkEvaluationJSON, len(evaluation.All))
+		for index, member := range evaluation.All {
+			status := "not_evaluated"
+			if member.Err != nil {
+				status = "errored"
+			} else if member.Evaluation != nil {
+				status = "passed"
+				if member.Evaluation.Violated {
+					status = "violated"
+				}
+			}
+			checks[index] = checkEvaluationJSON{Name: member.Name, Status: status, Evaluation: invariantEvaluation(member.Evaluation), Error: optionalError(member.Err)}
+		}
+		return allEvaluationJSON{Type: "all", Checks: checks, Violated: evaluation.Violated, Complete: evaluation.Complete()}
+	}
 	if concrete := evaluation.JSONInteger; concrete != nil {
 		return jsonIntegerEvaluationJSON{
 			Type: "json_integer", Observed: concrete.Observed, Violated: concrete.Violated,
@@ -534,6 +644,7 @@ func invariantEvaluation(evaluation *engine.InvariantEvaluation) any {
 	if concrete := evaluation.MaximumSuccessfulAttempts; concrete != nil {
 		return maximumSuccessfulAttemptsEvaluationJSON{
 			Type:                 "maximum_successful_attempts",
+			Measurement:          "matching_http_response_count",
 			SuccessfulAttemptIDs: append([]int{}, concrete.SuccessfulAttemptIDs...),
 			OverLimitAttemptIDs:  append([]int{}, concrete.OverLimitAttemptIDs...),
 			Violated:             concrete.Violated,
@@ -562,19 +673,28 @@ func reductionResultJSON(input Input) *reductionJSON {
 			retained = trialsJSON(candidate.Trials.Trials)
 		}
 		candidates[index] = candidateReductionJSON{
-			Number:      index + 1,
-			Attempts:    candidate.Candidate.Attempts,
-			Concurrency: candidate.Candidate.Concurrency,
-			Accepted:    candidate.Accepted,
-			Summary:     reductionSummaryJSON(candidate.Summary),
-			Error:       optionalError(candidate.Err),
-			Trials:      retained,
+			Number:                 index + 1,
+			Attempts:               candidate.Candidate.Attempts,
+			Concurrency:            candidate.Candidate.Concurrency,
+			Accepted:               candidate.Accepted,
+			OutcomeRequirementsMet: candidate.OutcomeRequirementsMet,
+			ChecksComplete:         candidate.ChecksComplete,
+			MatchingViolations:     candidate.MatchingViolations,
+			Summary:                reductionSummaryJSON(candidate.Summary),
+			Error:                  optionalError(candidate.Err),
+			Trials:                 retained,
 		}
 	}
+	var direction *reduction.FailureDirection
+	if result.FailureDirection != "" {
+		direction = new(result.FailureDirection)
+	}
 	return &reductionJSON{
-		Status:        status,
-		Timing:        timing(result.StartedAt, result.CompletedAt),
-		MaxCandidates: reduction.MaxCandidates,
+		Status:           status,
+		FailureDirection: direction,
+		FailureCheck:     optionalString(result.FailureCheck),
+		Timing:           timing(result.StartedAt, result.CompletedAt),
+		MaxCandidates:    reduction.MaxCandidates,
 		Baseline: baselineReductionJSON{
 			Attempts:    input.Scenario.Attempts,
 			Concurrency: input.Scenario.Concurrency,
